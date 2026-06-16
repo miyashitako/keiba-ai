@@ -1,0 +1,29 @@
+cd C:\Users\admin02\Desktop\keiba_ai
+python -m streamlit run app.py
+
+ __pycache__ 削除
+rmdir /s /q __pycache__
+
+GitHub（pyはここに置く）
+https://github.com/
+Googleアカウントで登録済。
+アカウント名:miyashitako
+フォルダ名:keiba-ai
+
+ブラウザ起動
+https://keiba-ai-apppy.streamlit.app/
+
+https://race.netkeiba.com/race/shutuba.html?race_id=
+
+202605021208
+青嵐賞
+202605030211
+安田記念
+202605021011
+オークス
+202605030208
+6/7東京1勝芝1600
+202609030411
+宝塚記念
+202605021010
+フリーウェイS
