@@ -171,7 +171,8 @@ def fetch_race_info(race_url: str) -> RaceInfo:
     if res.status_code != 200:
         return info
 
-    html_text = res.content.decode("euc-jp", errors="replace")
+    # race.netkeiba.comはUTF-8（v1.1修正）
+    html_text = res.content.decode("utf-8", errors="replace")
     soup = BeautifulSoup(html_text, "html.parser")
 
     # ── レース名
@@ -292,7 +293,8 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
     if res.status_code != 200:
         raise ConnectionError(f"HTTPエラー: {res.status_code}")
 
-    html_text = res.content.decode("euc-jp", errors="replace")
+    # race.netkeiba.comはUTF-8（v1.1修正）
+    html_text = res.content.decode("utf-8", errors="replace")
     soup = BeautifulSoup(html_text, "html.parser")
     tables = soup.find_all("table")
     if not tables:
@@ -382,16 +384,12 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
 
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
-        # res.textではなくres.contentから明示的にEUC-JPデコード（Streamlit Cloud対応v1.1）
-        # res.textはRequestsの自動デコードに依存するため環境によって文字化けが発生する
-        res.encoding = "EUC-JP"
     except Exception as e:
         raise ConnectionError(f"馬情報の取得に失敗しました ({horse_id}): {e}")
 
     if res.status_code != 200:
         return []
 
-    # res.contentからEUC-JPを明示的にデコードしてBeautifulSoupに渡す
     html_text = res.content.decode("euc-jp", errors="replace")
     soup = BeautifulSoup(html_text, "html.parser")
     table = soup.find("table", class_="db_h_race_results")

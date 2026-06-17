@@ -22,7 +22,7 @@ WEIGHT_FACTOR   = 0.1
 # 小さいほど格が高い（良評価）。タイムの代わりにスコアの基軸となる。
 # スコア分布が85〜150台になるよう設定（旧タイムベースとスケール統一）
 CLASS_BASE = {
-    "新馬":       97.0,   # 未勝利より価値高い（新馬勝ち > 未勝利勝ち）
+    "新馬":       92.0,   # 1勝クラスと同格（v1.1：新馬勝ち ≒ 1勝クラス勝ち）
     "未勝利":     95.0,
     "1勝クラス":  92.0,
     "500万下":    92.0,
@@ -935,6 +935,51 @@ def calc_phase1(
             past_races = central_races
             result.note = (result.note + f" [地方走除外{local_excluded}走]").strip()
 
+    # ── 障害転向処理（v1.1追加）
+    # 直近の連続した障害走のみを使い、その前の平地走は除外する
+    # 障害走はタイム比較が無意味なため gap=0 で着順のみ評価
+    def _is_hurdle(rc: str) -> bool:
+        rc_n = rc.replace("　", " ").replace("　", " ")
+        return "障" in rc_n or "障害" in rc_n or "hurdle" in rc_n.lower() or "steeplechase" in rc_n.lower()
+
+    if past_races and any(_is_hurdle(pr.race_class) for pr in past_races):
+        # 先頭から連続する障害走を取り出し、最初の平地走以降を除外
+        hurdle_streak = []
+        for pr in past_races:
+            if _is_hurdle(pr.race_class):
+                hurdle_streak.append(pr)
+            else:
+                break  # 平地走が出たら打ち切り
+        if hurdle_streak:
+            past_races = hurdle_streak
+            result.note = (result.note + f" [障害走のみ使用({len(hurdle_streak)}走)]").strip()
+            # 障害走はtaimetとgapを0にして着順のみで評価させる
+            for pr in past_races:
+                pr.time_sec = 0.0
+                pr.winner_time_sec = 0.0
+                pr.margin = 0.0
+
+    # ── 格上挑戦除外（v1.1追加）
+    # 今回クラスより格上のレースに出走して大敗した走は参考外として除外
+    # 「今回クラスのCLASS_BASE + 5.0以上の格上レース かつ 着順6着以下」
+    if current_class and past_races:
+        current_base = get_class_base(current_class)
+        non_overclass = []
+        overclass_excluded = 0
+        for pr in past_races:
+            pr_base = get_class_base(pr.race_class)
+            # 格上 = pr_baseがcurrent_baseより4.0以上小さい（より強いクラス）
+            # 例: 未勝利(95)に対して1勝クラス(92)は格上 → 95-92=3.0 < 4.0 なので除外しない
+            #     未勝利(95)に対してOP(80)は格上 → 95-80=15.0 ≥ 4.0 → 6着以下なら除外
+            if (current_base - pr_base) >= 2.0 and pr.finish >= 6:
+                # 格上レースで大敗 → 除外
+                overclass_excluded += 1
+            else:
+                non_overclass.append(pr)
+        if overclass_excluded > 0 and non_overclass:
+            past_races = non_overclass
+            result.note = (result.note + f" [格上挑戦除外{overclass_excluded}走]").strip()
+
     # ── 各走のポイント計算（最大3走）
     targets = past_races[:3]
     race_points = []
@@ -1416,3 +1461,234 @@ def apply_phase5(
     if adjusted and hasattr(adjusted[0], "phase2_score"):
         return sorted(adjusted, key=lambda x: x.phase2_score)
     return sorted(adjusted, key=lambda x: x.phase1_score)
+
+# ──────────────────────────────────────────────
+# 展開・トラックバイアスロジック（v1.1追加）
+# ──────────────────────────────────────────────
+
+# ── ボーナス/ペナルティ値テーブル（後から微調整可能）──
+PACE_BIAS_VALUES = {
+    "large":  1.5,   # 強ボーナス/ペナルティ
+    "medium": 0.8,   # 中ボーナス/ペナルティ
+    "small":  0.4,   # 小ボーナス/ペナルティ
+}
+
+# 脚質カテゴリ
+RUNNING_STYLE_FRONT  = {"逃げ", "先行"}
+RUNNING_STYLE_BEHIND = {"差し", "追い込み"}
+
+# 競馬場・距離条件テーブル
+VENUE_DISTANCE_BIAS = {
+    # (venue, surface, distance_range) → {脚質: (符号, size)}
+    ("中山", "芝", (1600, 1600)): {
+        "inner_front":  ("bonus",   "large"),   # 内枠逃げ先行
+        "outer_behind": ("penalty", "large"),   # 外枠差追
+    },
+    ("東京", "芝", (1800, 2000)): {
+        "outer_front":  ("penalty", "medium"),  # 外枠逃げ先行
+    },
+    ("京都", "芝", None): {          # 外回り限定（direction="右"で外回り判定）
+        "behind":       ("bonus",   "medium"),
+    },
+    ("中京", "芝", (1200, 1200)): {
+        "behind":       ("bonus",   "medium"),
+        "nige":         ("penalty", "medium"),
+    },
+    ("阪神", "芝", None): {          # 内回り限定
+        "senkou":       ("bonus",   "medium"),
+    },
+}
+
+LOCAL_VENUES_PACE = {"福島", "小倉", "函館", "札幌"}   # ローカル先行有利
+
+# 芝重馬場で直線が長い会場（差し有利）
+LONG_STRAIGHT_VENUES = {"東京", "阪神"}   # 阪神は外回りのみ
+
+
+def judge_running_style(corner_pos: str, field_size: int) -> str:
+    """
+    コーナー通過順位（例："10-9", "3-3-4-4"）と頭数から脚質を判定する。
+    戻り値: "逃げ" / "先行" / "差し" / "追い込み" / ""（判定不能）
+
+    判定基準（頭数に対する相対位置）：
+      最終コーナー順位 / 頭数
+      ≤ 1/頭数（1番手） → 逃げ
+      ≤ 0.30            → 先行
+      ≤ 0.60            → 差し
+      > 0.60            → 追い込み
+    """
+    if not corner_pos or not field_size:
+        return ""
+    # 最終コーナー（末尾の数字）を取得
+    parts = corner_pos.replace("=", "-").split("-")
+    nums = []
+    for p in parts:
+        try:
+            nums.append(int(p.strip()))
+        except ValueError:
+            pass
+    if not nums:
+        return ""
+    last = nums[-1]
+    ratio = last / field_size
+    if last == 1:
+        return "逃げ"
+    elif ratio <= 0.30:
+        return "先行"
+    elif ratio <= 0.60:
+        return "差し"
+    else:
+        return "追い込み"
+
+
+def calc_running_style(past_races: list) -> str:
+    """
+    過去走（最大5走）の脚質判定結果を集計して代表脚質を返す。
+    各走でjudge_running_styleを呼び、最頻値を採用。
+    """
+    from collections import Counter
+    styles = []
+    for pr in past_races[:5]:
+        fs = getattr(pr, "field_size", 0)
+        cp = getattr(pr, "corner_pos", "")
+        s = judge_running_style(cp, fs)
+        if s:
+            styles.append(s)
+    if not styles:
+        return ""
+    # 最頻値
+    counter = Counter(styles)
+    return counter.most_common(1)[0][0]
+
+
+def calc_pace_bias_bonus(
+    horse_name: str,
+    horse_number: int,
+    frame_number: int,
+    running_style: str,     # "逃げ"/"先行"/"差し"/"追い込み"
+    field_size: int,        # 出走頭数
+    all_styles: list,       # [(horse_number, running_style), ...] 全出走馬
+    race_venue: str,        # "東京"/"阪神" など
+    race_surface: str,      # "芝"/"ダ"
+    race_distance: int,
+    race_direction: str,    # "右"/"左"/"右外"/"左外" など
+    track_cond: str,        # "良"/"稍重"/"重"/"不良"
+    race_week: int,         # 開催週（1=開幕週, 4以上=荒れ馬場）
+    course_change: bool,    # コース替わり初週フラグ
+) -> tuple[float, str]:
+    """
+    展開・トラックバイアスによるボーナス/ペナルティを計算する（v1.1）。
+    戻り値: (補正値, noteラベル)  ※スコアから引く（正値=有利）
+    """
+    if not running_style:
+        return (0.0, "")
+
+    bonus = 0.0
+    notes = []
+    V = PACE_BIAS_VALUES
+
+    is_front  = running_style in RUNNING_STYLE_FRONT
+    is_behind = running_style in RUNNING_STYLE_BEHIND
+    is_nige   = running_style == "逃げ"
+    is_senkou = running_style == "先行"
+    is_oikomi = running_style == "追い込み"
+
+    # ── 1. レース展開バイアス ──────────────────────────────
+    front_count  = sum(1 for _, s in all_styles if s in RUNNING_STYLE_FRONT)
+    behind_count = sum(1 for _, s in all_styles if s in RUNNING_STYLE_BEHIND)
+    half = field_size / 2
+
+    if front_count >= half and is_behind:
+        bonus += V["medium"]
+        notes.append(f"前有利展開({front_count}頭):差追有利")
+    elif behind_count >= half and is_front:
+        bonus += V["medium"]
+        notes.append(f"後有利展開({behind_count}頭):逃先有利")
+
+    # ── 2. 競馬場・距離・枠順バイアス ──────────────────────
+    is_inner = frame_number <= 4
+    is_outer_frame = frame_number >= 12
+    is_outer_13 = frame_number >= 13
+    is_outer_12 = frame_number >= 12
+    is_inner_course = "内" in race_direction or race_direction in ("右", "左")
+    is_outer_course = "外" in race_direction
+
+    if race_venue == "中山" and race_surface == "芝" and race_distance == 1600:
+        if is_inner and is_front:
+            bonus += V["large"]
+            notes.append("中山マイル内枠逃先:有利")
+        if is_outer_13 and is_behind:
+            bonus -= V["large"]
+            notes.append("中山マイル外枠差追:不利")
+
+    if race_venue == "東京" and race_surface == "芝" and 1800 <= race_distance <= 2000:
+        if is_outer_12 and is_front:
+            bonus -= V["medium"]
+            notes.append("東京外枠逃先:不利")
+
+    if race_venue == "京都" and race_surface == "芝" and is_outer_course:
+        if is_behind:
+            bonus += V["medium"]
+            notes.append("京都外回り差追:有利")
+
+    if race_venue == "中京" and race_surface == "芝" and race_distance == 1200:
+        if is_behind:
+            bonus += V["medium"]
+            notes.append("中京1200差追:有利")
+        if is_nige:
+            bonus -= V["medium"]
+            notes.append("中京1200逃げ:不利")
+
+    if race_venue == "阪神" and race_surface == "芝" and is_inner_course:
+        if is_senkou:
+            bonus += V["medium"]
+            notes.append("阪神内回り先行:有利")
+
+    if race_venue in LOCAL_VENUES_PACE:
+        if is_front:
+            bonus += V["medium"]
+            notes.append(f"{race_venue}逃先:有利")
+        if is_oikomi:
+            bonus -= V["medium"]
+            notes.append(f"{race_venue}追込:不利")
+
+    # ── 3. 馬場状態バイアス ────────────────────────────────
+    is_heavy = track_cond in ("重", "不良")
+    is_long_straight = (
+        race_venue == "東京" or
+        (race_venue == "阪神" and is_outer_course)
+    )
+
+    if race_surface == "ダ" and is_heavy:
+        if is_front:
+            bonus += V["large"]
+            notes.append("ダート道悪逃先:有利")
+
+    if race_surface == "芝" and is_heavy:
+        if is_long_straight:
+            if is_behind:
+                bonus += V["medium"]
+                notes.append("芝道悪長直線差追:有利")
+        else:
+            if is_front:
+                bonus += V["small"]
+                notes.append("芝道悪小回り逃先:有利")
+
+    # ── 4. 開催段階・コース替わりバイアス（芝限定）──────────
+    if race_surface == "芝":
+        is_opening = (race_week == 1) or course_change
+        is_worn    = (race_week >= 4)
+
+        if is_opening and is_front:
+            bonus += V["medium"]
+            notes.append("開幕週/コース替逃先:有利")
+        if is_worn:
+            if is_behind:
+                bonus += V["small"]
+                notes.append("馬場荒れ差追:有利")
+            if is_nige:
+                bonus -= V["small"]
+                notes.append("馬場荒れ逃げ:不利")
+
+    label = "/".join(notes) if notes else ""
+    return (round(bonus, 3), label)

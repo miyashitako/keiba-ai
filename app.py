@@ -13,6 +13,7 @@ from calculator import (
     apply_phase5, apply_venue_jockey_bonus, MUDDY_TRACK_BONUS,
     calc_grade_bonus, calc_recent_form_penalty,  # v1.0復活
     calc_distance_aptitude_bonus,
+    calc_running_style, calc_pace_bias_bonus,
 )
 
 st.set_page_config(
@@ -36,6 +37,7 @@ for key, default in [
     ("phase2_results", []),
     ("phase5_applied", False),
     ("phase3_results", None),    # Phase3（会場・騎手）適用済みキャッシュ
+    ("running_styles", {}),      # {horse_number: running_style} 脚質キャッシュ
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -69,6 +71,10 @@ if fetch_btn and race_url:
             st.session_state.horses       = horses
             st.session_state.phase5_applied = False
             st.session_state.phase3_results = None
+            st.session_state.running_styles = {
+                h.number: calc_running_style(h.past_races)
+                for h in horses
+            }
 
             # 馬齢限定戦モード：自動判定結果をセッションに保存
             st.session_state["age_limited_auto"] = race_info.is_age_limited
@@ -138,6 +144,13 @@ if st.session_state.phase2_results:
         use_dist_apt = st.toggle("距離適性補正を使う", value=True,
                                  help="±200m以内の好走実績・スタミナ証明でボーナス。距離実績なしはペナルティ")
 
+    col_opt5, col_opt6 = st.columns(2)
+    with col_opt5:
+        use_pace_bias = st.toggle("展開・トラックバイアス補正を使う", value=True,
+                                  help="脚質と展開・馬場・開催週から有利不利を補正")
+    with col_opt6:
+        pass
+
     # 馬齢限定戦トグル（自動判定を上書き可能）
     auto_age = st.session_state.get("age_limited_auto", False)
     age_limited_toggle = st.toggle(
@@ -194,11 +207,52 @@ if st.session_state.phase2_results:
             )
         st.session_state.phase3_results = list(ranking_base)  # Phase3済みをキャッシュ
 
+    # ── 展開・トラックバイアス補正（Phase3の後に適用）
+    if use_pace_bias and ri and not st.session_state.phase5_applied:
+        _styles     = st.session_state.get("running_styles", {})
+        _all_styles = [(n, s) for n, s in _styles.items() if s]
+        _field_size = len(st.session_state.horses)
+
+        # 開催週・コース替わりの入力
+        with st.expander("📅 展開設定（開催週・コース替わり）", expanded=False):
+            _cols = st.columns(2)
+            _race_week   = _cols[0].number_input("開催週（1=開幕週）", min_value=1, max_value=8,
+                                                  value=1, step=1, key="pace_race_week")
+            _course_chg  = _cols[1].checkbox("コース替わり初週", value=False, key="pace_course_change")
+            st.caption("開幕週・コース替わりは逃げ先行有利、4週目以降は差し追込有利の補正が入ります")
+
+        _adjusted = []
+        import copy as _cp2
+        for r in st.session_state.phase3_results:
+            _h = next((h for h in st.session_state.horses if h.number == r.horse_number), None)
+            _style = _styles.get(r.horse_number, "")
+            _frame = _h.frame if _h else 0
+            _pb, _plabel = calc_pace_bias_bonus(
+                r.horse_name, r.horse_number, _frame,
+                _style, _field_size, _all_styles,
+                ri.venue or "", ri.surface or "", ri.distance or 0,
+                ri.direction or "", ri.track_cond or "",
+                int(_race_week), bool(_course_chg),
+            )
+            if _pb != 0.0:
+                _nr = _cp2.copy(r)
+                if use_phase2:
+                    _nr.phase2_score = round(_nr.phase2_score - _pb, 3)
+                else:
+                    _nr.phase1_score = round(_nr.phase1_score - _pb, 3)
+                _nr.note = (_nr.note + f" [展開:{_plabel}]").strip()
+                _adjusted.append(_nr)
+            else:
+                _adjusted.append(r)
+        _pace_base = sorted(_adjusted, key=lambda x: x.phase2_score if use_phase2 else x.phase1_score)
+    else:
+        _pace_base = st.session_state.phase3_results or []
+
     # 表示用ranking：Phase5適用済みならphase2_resultsを、未適用ならphase3_resultsを使う
     if st.session_state.phase5_applied:
         display_base = st.session_state.phase2_results  # Phase5済みデータ
     else:
-        display_base = st.session_state.phase3_results  # Phase3済みデータ
+        display_base = _pace_base  # 展開バイアス適用済みデータ
 
     ranking = build_ranking_phase2(display_base) if use_phase2 else build_ranking(display_base)
 
