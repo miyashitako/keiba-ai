@@ -7,14 +7,19 @@ import streamlit as st
 import pandas as pd
 
 from scraper import fetch_all_horses, RaceInfo
-from calculator import (
-    calc_phase1, calc_phase2, calc_phase2_all,
-    calc_phase4, build_ranking, build_ranking_phase2,
-    apply_phase5, apply_venue_jockey_bonus, MUDDY_TRACK_BONUS,
-    calc_grade_bonus, calc_recent_form_penalty,  # v1.0復活
-    calc_distance_aptitude_bonus,
-    calc_running_style, calc_pace_bias_bonus,
-)
+try:
+    from calculator import (
+        calc_phase1, calc_phase2, calc_phase2_all,
+        calc_phase4, build_ranking, build_ranking_phase2,
+        apply_phase5, apply_venue_jockey_bonus, MUDDY_TRACK_BONUS,
+        calc_grade_bonus, calc_recent_form_penalty,
+        calc_distance_aptitude_bonus,
+        calc_running_style, calc_pace_bias_bonus,
+    )
+except ImportError as _e:
+    import streamlit as _st
+    _st.error(f"ImportError詳細: {_e}")
+    raise
 
 st.set_page_config(
     page_title="競馬AI予想",
