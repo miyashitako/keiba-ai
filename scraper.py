@@ -60,6 +60,8 @@ class PastRace:
     jockey: str = ""
     is_local: bool = False   # 地方競馬場の走（v0.9追加）
     field_size: int = 0       # 出走頭数（v1.1追加）
+    corner_pos: str = ""      # コーナー通過順位（v1.1追加）例："10-9", "3-3-4-4"
+    race_day: int = 0         # 開催日次（v1.1追加）例：3東京2→2、開幕週判定用
 
 
 @dataclass
@@ -169,7 +171,8 @@ def fetch_race_info(race_url: str) -> RaceInfo:
     if res.status_code != 200:
         return info
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    html_text = res.content.decode("euc-jp", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
 
     # ── レース名
     race_name_el = soup.find("h1", class_="RaceName")
@@ -289,7 +292,8 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
     if res.status_code != 200:
         raise ConnectionError(f"HTTPエラー: {res.status_code}")
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    html_text = res.content.decode("euc-jp", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
     tables = soup.find_all("table")
     if not tables:
         raise ValueError("テーブルが見つかりませんでした。")
@@ -378,6 +382,8 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
 
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
+        # res.textではなくres.contentから明示的にEUC-JPデコード（Streamlit Cloud対応v1.1）
+        # res.textはRequestsの自動デコードに依存するため環境によって文字化けが発生する
         res.encoding = "EUC-JP"
     except Exception as e:
         raise ConnectionError(f"馬情報の取得に失敗しました ({horse_id}): {e}")
@@ -385,7 +391,9 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
     if res.status_code != 200:
         return []
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    # res.contentからEUC-JPを明示的にデコードしてBeautifulSoupに渡す
+    html_text = res.content.decode("euc-jp", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
     table = soup.find("table", class_="db_h_race_results")
     if table is None:
         return []
@@ -446,6 +454,15 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             field_str = get(6)
             field_nums = re.findall(r"\d+", field_str)
             pr.field_size = int(field_nums[0]) if field_nums else 0
+
+            # コーナー通過順位（列25）v1.1追加
+            pr.corner_pos = get(25) if len(cols) > 25 else ""
+
+            # 開催日次（列3）v1.1追加 例："3東京2" → 列01, 列03="8"
+            # 列01="3東京2"の末尾数字が開催日次
+            kaisan_str = get(1)   # 例："3東京2"
+            day_m = re.search(r"(\d+)$", kaisan_str)
+            pr.race_day = int(day_m.group(1)) if day_m else 0
 
             pr.jockey = get(12)
 
