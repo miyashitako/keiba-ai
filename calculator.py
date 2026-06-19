@@ -468,24 +468,33 @@ def calc_grade_bonus(
         "L":       1.0,
     }
 
-    best: dict[str, int] = {}
+    # 同一グレードの好走を逓減合算（v1.1）
+    # 1本目100%、2本目50%、3本目以降25%
+    DECAY_RATES = [1.0, 0.5, 0.25]
+
+    # グレード別に好走（4着以内）を着順昇順でリスト化
+    grade_runs: dict[str, list] = {}
     for pr in past_races:
         if pr.finish <= 0 or pr.finish > 4:
             continue
         gkey = _detect_grade_key(pr.race_class)
         if not gkey:
             continue
-        if gkey not in best or pr.finish < best[gkey]:
-            best[gkey] = pr.finish
+        if gkey not in grade_runs:
+            grade_runs[gkey] = []
+        grade_runs[gkey].append(pr.finish)
 
     total = 0.0
-    for gkey, rank in best.items():
+    for gkey, finishes in grade_runs.items():
+        finishes_sorted = sorted(finishes)  # 着順昇順（最良から）
         if age_limited:
             base = AGE_LIMITED_BASE.get(gkey, 1.0)
         else:
             base = GRADE_BONUS_TABLE.get(gkey, 0.0)
-        scale = GRADE_RANK_SCALE.get(rank, 0.4)
-        total += base * scale
+        for i, rank in enumerate(finishes_sorted):
+            decay = DECAY_RATES[i] if i < len(DECAY_RATES) else DECAY_RATES[-1]
+            scale = GRADE_RANK_SCALE.get(rank, 0.4)
+            total += base * scale * decay
     return round(total, 4)
 
 
@@ -900,6 +909,49 @@ def calc_race_point(
     return round(point, 3)
 
 
+def calc_mixed_sex_bonus(past_races: list, horse_sex: str) -> tuple[float, str]:
+    """
+    牡馬混合好走ボーナス（v1.1追加）。
+    出走馬が牝馬の場合、牡馬混合戦（牝馬限定でないレース）での好走（3着以内）に
+    追加ボーナスを付与する。古馬・若馬を問わず適用。
+
+    対象例：アーモンドアイ、ジェンティルドンナ、ウオッカ、エアグルーヴ（古馬混合G1）、
+            レガレイラ（ホープフルS）、レーヴディソール（デイリー杯2歳S）等。
+
+    同一グレードの逓減合算ロジック（calc_grade_bonusと同様）と独立して、
+    全好走を対象にシンプルな逓減合算で評価する。
+    """
+    if horse_sex != "牝":
+        return (0.0, "")
+
+    DECAY_RATES = [1.0, 0.6, 0.3]
+    MIXED_BONUS_BASE = {
+        1: 1.5, 2: 1.2, 3: 0.9,   # 着順別の基礎ボーナス
+    }
+
+    mixed_good_runs = []
+    for pr in past_races:
+        if pr.finish <= 0 or pr.finish > 3:
+            continue
+        if getattr(pr, "is_female_only", False):
+            continue   # 牝馬限定戦は対象外
+        mixed_good_runs.append(pr.finish)
+
+    if not mixed_good_runs:
+        return (0.0, "")
+
+    mixed_good_runs.sort()  # 着順昇順（最良から）
+    total = 0.0
+    for i, rank in enumerate(mixed_good_runs):
+        decay = DECAY_RATES[i] if i < len(DECAY_RATES) else DECAY_RATES[-1]
+        base = MIXED_BONUS_BASE.get(rank, 0.0)
+        total += base * decay
+
+    total = round(total, 3)
+    label = f"牡混合好走({len(mixed_good_runs)}走):+{total:.1f}" if total > 0 else ""
+    return (total, label)
+
+
 def calc_phase1(
     horse_name: str,
     horse_number: int,
@@ -913,12 +965,15 @@ def calc_phase1(
     age_limited: bool = False,        # 馬齢限定戦モード（v1.0追加）
     classic_distance: bool = False,   # 秋華賞・菊花賞等（v1.0追加）
     race_date: str = "",              # 今回レース日（v1.1追加：出走間隔計算用）
+    horse_sex: str = "",              # 性別（v1.1追加：牡混合好走ボーナス用）
+    is_female_only_race: bool = False,  # 今回が牝馬限定戦（v1.1追加）
 ) -> Phase1Result:
     """
     Phase1スコアを計算する（v1.1 着順・着差・クラスベース）
     target_distance > 0 の場合、距離フィルターを適用
     target_surface が指定された場合、芝ダフィルターを適用
     race_date が指定された場合、前走からの出走間隔補正を適用
+    horse_sex="牝" の場合、牡馬混合好走ボーナスを適用
     """
     result = Phase1Result(horse_name=horse_name, horse_number=horse_number)
 
@@ -976,11 +1031,14 @@ def calc_phase1(
         overclass_excluded = 0
         for pr in past_races:
             pr_base = get_class_base(pr.race_class)
-            # 格上 = pr_baseがcurrent_baseより4.0以上小さい（より強いクラス）
-            # 例: 未勝利(95)に対して1勝クラス(92)は格上 → 95-92=3.0 < 4.0 なので除外しない
-            #     未勝利(95)に対してOP(80)は格上 → 95-80=15.0 ≥ 4.0 → 6着以下なら除外
-            if (current_base - pr_base) >= 2.0 and pr.finish >= 6:
-                # 格上レースで大敗 → 除外
+            # 格上 = pr_baseがcurrent_baseより2.0以上小さい（より強いクラス）
+            # ただし重賞（G3/G2/G1/Jpn系）への挑戦は除外対象外
+            # 重賞挑戦は格上挑戦ではなく実力試しとして扱う
+            is_graded = _detect_grade_key(pr.race_class) in (
+                "G1","G2","G3","Jpn1","Jpn2","Jpn3","L"
+            )
+            if (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_graded:
+                # 格上クラス（非重賞）で大敗 → 除外
                 overclass_excluded += 1
             else:
                 non_overclass.append(pr)
@@ -1111,6 +1169,15 @@ def calc_phase1(
             result.phase1_score = round(result.phase1_score - grade_b, 3)
             result.ability_avg  = round(result.ability_avg  - grade_b, 3)
             result.note = (result.note + f" [格B:-{grade_b:.1f}]").strip()
+
+    # ── 牡馬混合好走ボーナス（v1.1追加）
+    # 今回が牝馬限定戦 かつ 出走馬が牝馬の場合のみ適用
+    if is_female_only_race and horse_sex == "牝":
+        mixed_b, mixed_label = calc_mixed_sex_bonus(past_races_all, horse_sex)
+        if mixed_b > 0:
+            result.phase1_score = round(result.phase1_score - mixed_b, 3)
+            result.ability_avg  = round(result.ability_avg  - mixed_b, 3)
+            result.note = (result.note + f" [{mixed_label}]").strip()
 
     # ── 昇級勢い
     if use_momentum and current_class:

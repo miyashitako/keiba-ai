@@ -101,6 +101,8 @@ if fetch_btn and race_url:
                     age_limited=_age,
                     classic_distance=_cls,
                     race_date=race_info.race_date or "",
+                    horse_sex=h.sex,
+                    is_female_only_race=getattr(race_info, "is_female_only", False),
                 )
                 for h in horses
             ]
@@ -343,7 +345,7 @@ if st.session_state.phase2_results:
         h3.caption("枠位置")
         h4.caption("重馬場")
 
-        for r in ranking[:10]:
+        for r in ranking:
             c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
             with c1:
                 st.write(f"**{r.horse_number}番 {r.horse_name}**")

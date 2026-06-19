@@ -40,6 +40,7 @@ class RaceInfo:
     race_date: str = ""
     is_age_limited: bool = False    # 馬齢限定戦フラグ（v1.0追加）
     is_classic_distance: bool = False  # 秋華賞・菊花賞等の長距離フラグ（v1.0追加）
+    is_female_only: bool = False    # 牝馬限定戦フラグ（v1.1追加）
 
 
 @dataclass
@@ -62,6 +63,7 @@ class PastRace:
     field_size: int = 0       # 出走頭数（v1.1追加）
     corner_pos: str = ""      # コーナー通過順位（v1.1追加）例："10-9", "3-3-4-4"
     race_day: int = 0         # 開催日次（v1.1追加）例：3東京2→2、開幕週判定用
+    is_female_only: bool = False  # 牝馬限定戦フラグ（v1.1追加）
 
 
 @dataclass
@@ -74,6 +76,7 @@ class Horse:
     jockey: str = ""
     weight_carried: float = 55.0
     past_races: list = field(default_factory=list)
+    sex: str = ""   # 性別：牡/牝/騸（v1.1追加）
 
 
 # ──────────────────────────────────────────────
@@ -257,6 +260,26 @@ def fetch_race_info(race_url: str) -> RaceInfo:
         if kw in combined_text:
             info.is_age_limited = True
             break
+
+    # 牝馬限定戦の判定（v1.1追加）
+    FEMALE_ONLY_RACE_KEYWORDS = ["牝馬限定", "牝限定"]
+    FEMALE_ONLY_RACE_NAMES = {
+        "桜花賞", "オークス", "秋華賞", "阪神JF", "エリザベス女王杯",
+        "ヴィクトリアマイル", "フィリーズレビュー", "チューリップ賞",
+        "フローラS", "忘れな草賞", "紫苑S", "クイーンS",
+        "阪神ジュベナイルフィリーズ", "府中牝馬S", "愛知杯",
+        "マーメイドS", "福島牝馬S", "北九州短距離S",
+    }
+    if any(kw in combined_text for kw in FEMALE_ONLY_RACE_KEYWORDS):
+        info.is_female_only = True
+    # レース名に「牝馬」が含まれる場合も牝馬限定戦とみなす
+    elif "牝馬" in info.race_name:
+        info.is_female_only = True
+    else:
+        for name in FEMALE_ONLY_RACE_NAMES:
+            if name in info.race_name:
+                info.is_female_only = True
+                break
     for name in CLASSIC_RACE_NAMES:
         if name in info.race_name:
             info.is_age_limited = True
@@ -335,8 +358,15 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
         if not horse.name:
             continue
 
-        # 騎手・斤量（列4）
+        # 騎手・斤量・性別（列4）
+        # 列4の形式: "牡5鹿岩田望58.0" → 先頭1文字が性別
         jockey_cell_text = cols[4].get_text(strip=True)
+        # 性別判定：牡/牝/セ（騸馬、netkeibaはカタカナ表記）
+        if jockey_cell_text:
+            if jockey_cell_text[0] in ("牡", "牝"):
+                horse.sex = jockey_cell_text[0]
+            elif jockey_cell_text[0] in ("セ", "騸"):
+                horse.sex = "セ"
 
         # 斤量（末尾の数値）
         wc_match = re.search(r"(\d{2,3}(?:\.\d)?)\s*$", jockey_cell_text)
@@ -452,6 +482,14 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             field_str = get(6)
             field_nums = re.findall(r"\d+", field_str)
             pr.field_size = int(field_nums[0]) if field_nums else 0
+
+            # 牝馬限定戦フラグ（v1.1追加）
+            # レース名に「牝」「牝馬」「フィリーズ」「オークス」等が含まれる場合
+            rc_for_female = pr.race_class
+            FEMALE_ONLY_KEYWORDS = ["牝", "フィリーズ", "オークス", "エリザベス女王杯",
+                                    "ヴィクトリアマイル", "阪神ジュベナイルフィリーズ",
+                                    "桜花賞", "秋華賞", "チューリップ賞"]
+            pr.is_female_only = any(kw in rc_for_female for kw in FEMALE_ONLY_KEYWORDS)
 
             # コーナー通過順位（列25）v1.1追加
             pr.corner_pos = get(25) if len(cols) > 25 else ""
