@@ -1031,14 +1031,11 @@ def calc_phase1(
         overclass_excluded = 0
         for pr in past_races:
             pr_base = get_class_base(pr.race_class)
-            # 格上 = pr_baseがcurrent_baseより2.0以上小さい（より強いクラス）
-            # ただし重賞（G3/G2/G1/Jpn系）への挑戦は除外対象外
-            # 重賞挑戦は格上挑戦ではなく実力試しとして扱う
-            is_graded = _detect_grade_key(pr.race_class) in (
-                "G1","G2","G3","Jpn1","Jpn2","Jpn3","L"
-            )
-            if (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_graded:
-                # 格上クラス（非重賞）で大敗 → 除外
+            # 格上 = pr_baseがcurrent_baseより4.0以上小さい（より強いクラス）
+            # 例: 未勝利(95)に対して1勝クラス(92)は格上 → 95-92=3.0 < 4.0 なので除外しない
+            #     未勝利(95)に対してOP(80)は格上 → 95-80=15.0 ≥ 4.0 → 6着以下なら除外
+            if (current_base - pr_base) >= 2.0 and pr.finish >= 6:
+                # 格上レースで大敗 → 除外
                 overclass_excluded += 1
             else:
                 non_overclass.append(pr)

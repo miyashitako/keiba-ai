@@ -267,19 +267,14 @@ def fetch_race_info(race_url: str) -> RaceInfo:
         "桜花賞", "オークス", "秋華賞", "阪神JF", "エリザベス女王杯",
         "ヴィクトリアマイル", "フィリーズレビュー", "チューリップ賞",
         "フローラS", "忘れな草賞", "紫苑S", "クイーンS",
-        "阪神ジュベナイルフィリーズ", "府中牝馬S", "愛知杯",
-        "マーメイドS", "福島牝馬S", "北九州短距離S",
+        "阪神ジュベナイルフィリーズ",
     }
     if any(kw in combined_text for kw in FEMALE_ONLY_RACE_KEYWORDS):
         info.is_female_only = True
-    # レース名に「牝馬」が含まれる場合も牝馬限定戦とみなす
-    elif "牝馬" in info.race_name:
-        info.is_female_only = True
-    else:
-        for name in FEMALE_ONLY_RACE_NAMES:
-            if name in info.race_name:
-                info.is_female_only = True
-                break
+    for name in FEMALE_ONLY_RACE_NAMES:
+        if name in info.race_name:
+            info.is_female_only = True
+            break
     for name in CLASSIC_RACE_NAMES:
         if name in info.race_name:
             info.is_age_limited = True
