@@ -1066,7 +1066,11 @@ def calc_phase1(
             # ただし重賞（G3/G2/G1/Jpn系）への挑戦は除外対象外
             # 重賞挑戦は格上挑戦ではなく実力試しとして扱う
             is_graded = _detect_grade_key(pr.race_class) in (
-                "G1","G2","G3","Jpn1","Jpn2","Jpn3","L"
+                "G1","G2","G3","Jpn1","Jpn2","Jpn3"
+                # "L"は除外対象外から外す（v1.2修正）
+                # L（リステッド）はOP相当の格上げレースであり、
+                # 1勝クラスからの出走で大敗した場合は格上挑戦として除外対象とする。
+                # G3以上の重賞と違い「実力試し」の意味合いが薄い。
             )
             if (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_graded:
                 # 格上クラス（非重賞）で大敗 → 除外
