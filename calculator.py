@@ -100,6 +100,22 @@ DISTANCE_FILTER_MARGIN = 200
 # 「実力があって走数が少ない馬」に二重罰を与えないよう完全廃止。
 SPARSE_RUNS_PENALTY = {}   # 空dict（廃止）
 
+# ── 特定レース・条件ペナルティ（v1.2追加）──────────────────────────
+FEMALE_HEAVY_PENALTY_RACES = {
+    "菊花賞", "天皇賞（春）", "天皇賞(春)",
+}
+FEMALE_HEAVY_PENALTY   = 3.0   # 菊花賞・天皇賞春：グレード制以降牝馬優勝ゼロ
+FEMALE_DART_PENALTY    = 2.5   # フェブラリーS：G1昇格以降牝馬優勝ゼロ
+FEMALE_LONG_PENALTY    = 2.5   # 3000m超レース：長距離牝馬苦戦傾向
+
+CLASSIC_RACE_NAMES = {
+    "皐月賞", "日本ダービー", "東京優駿", "菊花賞",
+    "桜花賞", "優駿牝馬", "オークス",
+}
+CLASSIC_LOW_CLASS_PENALTY = 2.0   # クラシック1勝以下クラスへのペナルティ
+
+ONE_WIN_OR_LESS = {"新馬", "未勝利", "1勝クラス", "500万下"}
+
 # ── 距離適性ボーナステーブル（v0.7追加）──────────────────────────────
 DIST_GOOD_FINISH_BONUS = {1: 1.2, 2: 0.9, 3: 0.6}   # 旧0.08→着順スケールに合わせて拡大
 
@@ -967,36 +983,51 @@ def calc_phase1(
     race_date: str = "",              # 今回レース日（v1.1追加：出走間隔計算用）
     horse_sex: str = "",              # 性別（v1.1追加：牡混合好走ボーナス用）
     is_female_only_race: bool = False,  # 今回が牝馬限定戦（v1.1追加）
+    race_name: str = "",              # 今回レース名（v1.2追加：特定レース条件ペナルティ用）
 ) -> Phase1Result:
     """
-    Phase1スコアを計算する（v1.1 着順・着差・クラスベース）
+    Phase1スコアを計算する（v1.2 着順・着差・クラスベース）
     target_distance > 0 の場合、距離フィルターを適用
     target_surface が指定された場合、芝ダフィルターを適用
     race_date が指定された場合、前走からの出走間隔補正を適用
     horse_sex="牝" の場合、牡馬混合好走ボーナスを適用
+    race_name が指定された場合、特定レース・条件ペナルティを適用
     """
     result = Phase1Result(horse_name=horse_name, horse_number=horse_number)
 
-    past_races_all = list(past_races)
+    _all_for_interval = list(past_races)   # 地方除外前・全走（出走間隔計算用）
 
-    # ── 芝ダフィルター（v1.0維持）
-    if target_surface:
+    # ── 地方走除外（v0.9 / v1.2バグ修正・順序修正）
+    # ※ 芝ダフィルターより先に地方除外を行う。
+    #   先に芝ダフィルターをかけると「地方ダート走のみ」が残り、
+    #   地方除外後に有効走ゼロになるケースを防ぐ。
+    # 修正前：central_racesが空の場合（全走が地方）はそのまま使っていた
+    # 修正後：中央走が1走でもあれば地方走を除外。全走地方の場合も除外してnoteに記録。
+    central_races = [pr for pr in past_races if not pr.is_local]
+    local_excluded = len(past_races) - len(central_races)
+    if local_excluded > 0:
+        if central_races:
+            past_races = central_races
+            result.note = (result.note + f" [地方走除外{local_excluded}走]").strip()
+        else:
+            # 全走が地方の場合：除外してnoteに記録（有効走数0として扱う）
+            past_races = []
+            result.note = (result.note + f" [地方走のみ({local_excluded}走)→除外]").strip()
+
+    # ── 芝ダフィルター（地方除外後に適用）
+    if target_surface and past_races:
         races_surf = [pr for pr in past_races if pr.surface == target_surface]
         if races_surf:
             past_races = races_surf
 
     # ── 距離フィルター廃止（v1.0）
     # 距離適性はボーナス/ペナルティで対応するため、全走を常に使用する。
-    # 1600m専門馬が2000mに出走する場合など、フィルターで全走除外される問題を解消。
-    dist_fallback = False  # 距離適性ボーナス関数との互換性のためFalseで維持
+    dist_fallback = False
 
-    # ── 地方走除外（v0.9）
-    central_races = [pr for pr in past_races if not pr.is_local]
-    local_excluded = len(past_races) - len(central_races)
-    if central_races:
-        if local_excluded > 0:
-            past_races = central_races
-            result.note = (result.note + f" [地方走除外{local_excluded}走]").strip()
+    # ── past_races_allを地方除外・芝ダフィルター後ベースで再定義（v1.2修正）
+    # 格ボーナス・距離適性・昇級勢い・混合好走ボーナス等の全補正に地方走が
+    # 混入しないよう、フィルター後のリストをベースにする。
+    past_races_all = list(past_races)
 
     # ── 障害転向処理（v1.1追加）
     # 直近の連続した障害走のみを使い、その前の平地走は除外する
@@ -1031,11 +1062,14 @@ def calc_phase1(
         overclass_excluded = 0
         for pr in past_races:
             pr_base = get_class_base(pr.race_class)
-            # 格上 = pr_baseがcurrent_baseより4.0以上小さい（より強いクラス）
-            # 例: 未勝利(95)に対して1勝クラス(92)は格上 → 95-92=3.0 < 4.0 なので除外しない
-            #     未勝利(95)に対してOP(80)は格上 → 95-80=15.0 ≥ 4.0 → 6着以下なら除外
-            if (current_base - pr_base) >= 2.0 and pr.finish >= 6:
-                # 格上レースで大敗 → 除外
+            # 格上 = pr_baseがcurrent_baseより2.0以上小さい（より強いクラス）
+            # ただし重賞（G3/G2/G1/Jpn系）への挑戦は除外対象外
+            # 重賞挑戦は格上挑戦ではなく実力試しとして扱う
+            is_graded = _detect_grade_key(pr.race_class) in (
+                "G1","G2","G3","Jpn1","Jpn2","Jpn3","L"
+            )
+            if (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_graded:
+                # 格上クラス（非重賞）で大敗 → 除外
                 overclass_excluded += 1
             else:
                 non_overclass.append(pr)
@@ -1133,7 +1167,7 @@ def calc_phase1(
     # 今回レース日と前走日付の差から休養期間を算出
     # 70〜112日（10〜16週）: 適度な休養 → -0.5pt（ボーナス）
     # 112日超（16週超）    : 長期休養   → +2.0pt（ペナルティ）
-    if race_date and past_races_all:
+    if race_date and _all_for_interval:
         from datetime import datetime as _dt
         try:
             # race_dateは "2026年6月7日" 形式、past_races.dateは "2026/06/14" 形式
@@ -1144,7 +1178,7 @@ def calc_phase1(
                 _today = _dt(int(_m.group(1)), int(_m.group(2)), int(_m.group(3)))
             else:
                 _today = _dt.strptime(_rd, "%Y/%m/%d")
-            _last_str = past_races_all[0].date
+            _last_str = _all_for_interval[0].date   # ← 地方除外前から前走日取得
             if _last_str:
                 _last = _dt.strptime(_last_str.strip(), "%Y/%m/%d")
                 _days = (_today - _last).days
@@ -1194,6 +1228,46 @@ def calc_phase1(
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)
         if dist_label:
             result.note = (result.note + f" [{dist_label}]").strip()
+
+    # ── 特定レース・条件ペナルティ（v1.2追加）
+    if race_name:
+        import unicodedata as _ud
+        rn = _ud.normalize("NFKC", race_name)
+
+        # ① 牝馬ペナルティ
+        if horse_sex == "牝":
+            is_heavy_race = any(r in rn for r in FEMALE_HEAVY_PENALTY_RACES)
+            is_feb        = "フェブラリー" in rn
+            is_long       = target_distance > 3000 and not is_heavy_race
+
+            if is_heavy_race:
+                pen = FEMALE_HEAVY_PENALTY
+                label = f"牝馬長距離重ペナ({rn[:6]}):+{pen:.1f}"
+            elif is_feb:
+                pen = FEMALE_DART_PENALTY
+                label = f"牝馬ダートペナ({rn[:6]}):+{pen:.1f}"
+            elif is_long:
+                pen = FEMALE_LONG_PENALTY
+                label = f"牝馬3000m超ペナ({target_distance}m):+{pen:.1f}"
+            else:
+                pen, label = 0.0, ""
+
+            if pen > 0:
+                result.phase1_score = round(result.phase1_score + pen, 3)
+                result.ability_avg  = round(result.ability_avg  + pen, 3)
+                result.note = (result.note + f" [{label}]").strip()
+
+        # ② クラシック1勝以下ペナルティ
+        is_classic = any(r in rn for r in CLASSIC_RACE_NAMES)
+        if is_classic and current_class:
+            rc_norm = _normalize_grade(current_class)
+            is_low_class = any(c in rc_norm for c in ONE_WIN_OR_LESS)
+            if is_low_class:
+                pen = CLASSIC_LOW_CLASS_PENALTY
+                label = f"クラシック1勝以下ペナ:+{pen:.1f}"
+                result.phase1_score = round(result.phase1_score + pen, 3)
+                result.ability_avg  = round(result.ability_avg  + pen, 3)
+                result.note = (result.note + f" [{label}]").strip()
 
     return result
 
