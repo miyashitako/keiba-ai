@@ -49,26 +49,125 @@ for key, default in [
 
 
 # ──────────────────────────────────────────────
-# ① URLからデータ取得
+# ① レース選択（プルダウン）
 # ──────────────────────────────────────────────
 
-st.header("① レースURL入力")
+st.header("① レース選択")
 
-race_url = st.text_input(
-    "netkeibaのレースURLを貼り付けてください",
-    placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=202505040409",
-)
+import datetime
 
-# 検証モード：過去レース検証時に「当日レース結果」が過去走に混入するのを防ぐ
-with st.expander("🔬 検証モード（過去レース検証時のみ使用）", expanded=False):
-    st.caption("過去に終了したレースで検証する場合、各馬の過去走データに当日レース結果が含まれます。")
-    st.caption("除外走数を1以上に設定すると、各馬の過去走の先頭N走をスキップして計算します。")
+# ── 競馬場テーブル ─────────────────────────────
+VENUE_OPTIONS = [
+    ("01", "札幌"),
+    ("02", "函館"),
+    ("03", "福島"),
+    ("04", "新潟"),
+    ("05", "東京"),
+    ("06", "中山"),
+    ("07", "中京"),
+    ("08", "京都"),
+    ("09", "阪神"),
+    ("10", "小倉"),
+]
+
+# 各場の最大開催回数（JRA年間開催日割より）
+VENUE_MAX_KAI = {
+    "01": 2,  # 札幌
+    "02": 1,  # 函館
+    "03": 3,  # 福島
+    "04": 4,  # 新潟
+    "05": 5,  # 東京
+    "06": 5,  # 中山
+    "07": 4,  # 中京
+    "08": 5,  # 京都
+    "09": 5,  # 阪神
+    "10": 2,  # 小倉
+}
+
+# 各場の1開催あたり最大日数
+# 東京・京都は12日開催あり、他は8日
+VENUE_MAX_NICHI = {
+    "01": 8,   # 札幌
+    "02": 8,   # 函館
+    "03": 8,   # 福島
+    "04": 8,   # 新潟
+    "05": 12,  # 東京（12日開催あり）
+    "06": 8,   # 中山
+    "07": 8,   # 中京
+    "08": 12,  # 京都（12日開催あり）
+    "09": 8,   # 阪神
+    "10": 8,   # 小倉
+}
+
+# ── デフォルト競馬場：今日の曜日から推定 ────────
+# 土日は前週末から継続開催中の場を優先（東京をデフォルト）
+_today = datetime.date.today()
+_default_venue_idx = 4   # 東京
+
+# ── プルダウン（スマホ考慮：2列×2行）────────────
+col_v, col_k = st.columns([3, 2])
+col_d, col_r = st.columns([2, 2])
+
+with col_v:
+    venue_label = st.selectbox(
+        "競馬場",
+        options=[name for _, name in VENUE_OPTIONS],
+        index=_default_venue_idx,
+    )
+    venue_code = next(code for code, name in VENUE_OPTIONS if name == venue_label)
+
+with col_k:
+    max_kai = VENUE_MAX_KAI.get(venue_code, 5)
+    kai = st.selectbox(
+        "開催回",
+        options=list(range(1, max_kai + 1)),
+        format_func=lambda x: f"第{x}回",
+        index=0,
+    )
+
+with col_d:
+    max_nichi = VENUE_MAX_NICHI.get(venue_code, 8)
+    nichime = st.selectbox(
+        "開催日",
+        options=list(range(1, max_nichi + 1)),
+        format_func=lambda x: f"{x}日目",
+        index=0,
+    )
+
+with col_r:
+    race_no = st.selectbox(
+        "レース番号",
+        options=list(range(1, 13)),
+        format_func=lambda x: f"{x}R",
+        index=10,  # デフォルト：11R
+    )
+
+# ── race_id・URL 自動生成 ───────────────────────
+year = _today.year
+race_id = f"{year}{venue_code}{kai:02d}{nichime:02d}{race_no:02d}"
+race_url_generated = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+
+st.caption(f"🔗 `{race_id}`　{race_url_generated}")
+
+# ── 検証モード & URL直接入力（折りたたみ） ───────
+with st.expander("🔬 検証モード・URL直接入力（上級設定）", expanded=False):
+    st.caption("**検証モード**：過去に終了したレースで検証する場合、除外走数を1以上に設定すると先頭N走をスキップします。")
     skip_runs = st.slider("直近N走を除外する", min_value=0, max_value=3, value=0, step=1,
                           key="skip_runs_slider")
+    st.divider()
+    st.caption("**URL直接入力**：URLを直接貼り付ける場合はこちら（プルダウン設定より優先）")
+    race_url_manual = st.text_input(
+        "netkeibaのレースURLを直接入力",
+        placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=202505040409",
+        key="race_url_manual",
+    )
+
+# 手動URLが入力されていればそちらを優先
+race_url = race_url_manual.strip() if st.session_state.get("race_url_manual", "").strip() else race_url_generated
 
 fetch_btn = st.button("🔍 データ取得", type="primary")
 
-if fetch_btn and race_url:
+if fetch_btn:
     with st.spinner("データ取得中... （各馬の過去走取得のため1〜2分かかります）"):
         try:
             race_info, horses = fetch_all_horses(race_url, past_limit=5)
@@ -103,6 +202,7 @@ if fetch_btn and race_url:
                     race_date=race_info.race_date or "",
                     horse_sex=h.sex,
                     is_female_only_race=getattr(race_info, "is_female_only", False),
+                    race_name=race_info.race_name,   # v1.2追加：特定レース条件ペナルティ用
                 )
                 for h in horses
             ]
@@ -114,8 +214,42 @@ if fetch_btn and race_url:
             st.success(f"✅ {len(horses)}頭のデータを取得しました")
             if race_info.is_age_limited:
                 st.info(f"🐴 馬齢限定戦を自動検出しました（格ボーナスを統合評価）")
+
+            # ── デバッグパネル（性別・列4の取得状況）──────────────────
+            # 来週以降のエラー再現時に原因特定するための情報を常時記録
+            sex_debug = [
+                f"#{h.number} {h.name}：sex='{h.sex}'　jockey='{h.jockey}'　斤量={h.weight_carried}"
+                for h in horses
+            ]
+            warnings = [
+                f"⚠️ #{h.number} {h.name}：{h._sex_parse_warning}　col4_raw={getattr(h, '_col4_raw', '?')}"
+                for h in horses if getattr(h, "_sex_parse_warning", None)
+            ]
+            with st.expander("🔍 デバッグ：性別・騎手取得状況（エラー調査用）", expanded=bool(warnings)):
+                st.caption("性別が空欄の馬がいる場合、土曜レース中のHTML構造変化が疑われます。")
+                if warnings:
+                    st.error("⚠️ 性別パース警告あり：来週エラー報告時にこの内容をコピーしてください")
+                    for w in warnings:
+                        st.text(w)
+                    st.divider()
+                for line in sex_debug:
+                    color = "🔴" if "sex=''" in line else "🟢"
+                    st.text(f"{color} {line}")
+                raw_log = getattr(race_info, "_scrape_debug_log", None)
+                if raw_log:
+                    st.subheader("スクレイパー診断ログ")
+                    st.code(raw_log, language="text")
+
         except Exception as e:
+            import traceback
             st.error(f"❌ エラーが発生しました: {e}")
+            # 詳細なトレースバックを展開パネルに表示（来週のデバッグ用）
+            with st.expander("🔍 エラー詳細（デバッグ情報）", expanded=True):
+                st.code(traceback.format_exc(), language="python")
+                if "horses" in dir() and horses:
+                    st.subheader("取得済み馬データ（エラー直前）")
+                    for h in horses:
+                        st.text(f"#{h.number} {h.name}：sex='{h.sex}'　jockey='{h.jockey}'")
             st.info("URLを確認するか、手動入力モードをお試しください。")
 
 # ──────────────────────────────────────────────
