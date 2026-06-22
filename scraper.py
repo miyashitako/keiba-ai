@@ -64,6 +64,7 @@ class PastRace:
     corner_pos: str = ""      # コーナー通過順位（v1.1追加）例："10-9", "3-3-4-4"
     race_day: int = 0         # 開催日次（v1.1追加）例：3東京2→2、開幕週判定用
     is_female_only: bool = False  # 牝馬限定戦フラグ（v1.1追加）
+    is_age_limited: bool = False  # 馬齢限定戦フラグ（v1.2追加：2歳・3歳限定）
 
 
 @dataclass
@@ -267,14 +268,19 @@ def fetch_race_info(race_url: str) -> RaceInfo:
         "桜花賞", "オークス", "秋華賞", "阪神JF", "エリザベス女王杯",
         "ヴィクトリアマイル", "フィリーズレビュー", "チューリップ賞",
         "フローラS", "忘れな草賞", "紫苑S", "クイーンS",
-        "阪神ジュベナイルフィリーズ",
+        "阪神ジュベナイルフィリーズ", "府中牝馬S", "愛知杯",
+        "マーメイドS", "福島牝馬S", "北九州短距離S",
     }
     if any(kw in combined_text for kw in FEMALE_ONLY_RACE_KEYWORDS):
         info.is_female_only = True
-    for name in FEMALE_ONLY_RACE_NAMES:
-        if name in info.race_name:
-            info.is_female_only = True
-            break
+    # レース名に「牝馬」が含まれる場合も牝馬限定戦とみなす
+    elif "牝馬" in info.race_name:
+        info.is_female_only = True
+    else:
+        for name in FEMALE_ONLY_RACE_NAMES:
+            if name in info.race_name:
+                info.is_female_only = True
+                break
     for name in CLASSIC_RACE_NAMES:
         if name in info.race_name:
             info.is_age_limited = True
@@ -485,6 +491,15 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
                                     "ヴィクトリアマイル", "阪神ジュベナイルフィリーズ",
                                     "桜花賞", "秋華賞", "チューリップ賞"]
             pr.is_female_only = any(kw in rc_for_female for kw in FEMALE_ONLY_KEYWORDS)
+
+            # 馬齢限定戦フラグ（v1.2追加）
+            # 「2歳」を含む → 常に馬齢限定
+            # 「3歳」を含む かつ「以上」を含まない → 馬齢限定
+            # 「3歳以上」→ 混合戦のため限定ではない
+            rc = pr.race_class
+            is_2yo = "2歳" in rc
+            is_3yo_limited = "3歳" in rc and "以上" not in rc
+            pr.is_age_limited = is_2yo or is_3yo_limited
 
             # コーナー通過順位（列25）v1.1追加
             pr.corner_pos = get(25) if len(cols) > 25 else ""

@@ -1053,32 +1053,35 @@ def calc_phase1(
                 pr.winner_time_sec = 0.0
                 pr.margin = 0.0
 
-    # ── 格上挑戦除外（v1.1追加）
-    # 今回クラスより格上のレースに出走して大敗した走は参考外として除外
-    # 「今回クラスのCLASS_BASE + 5.0以上の格上レース かつ 着順6着以下」
+    # ── 格上挑戦除外（v1.1追加 / v1.2修正）
+    # 今回クラスより格上のレースで大敗した走は参考外として除外。
+    # 判定基準：(current_base - pr_base) >= 2.0 かつ finish >= 6
+    #
+    # ただし以下は除外しない：
+    #   ・今回クラスと過去走クラスがともにオープン以上（base≤80）の場合
+    #     → オープン馬がG1/G2/G3に挑戦して大敗しても「同格の挑戦」として扱う
+    #       （例：オープン馬がG1大敗、G3馬がG1大敗 → 除外しない）
+    #   ・馬齢限定L・OP（is_age_limited=True）→ CLASS_BASE読み替えで対応
+    #
+    # 1勝馬がG2/G3で大敗、2勝馬がG1で大敗 → 格上挑戦として除外
+    OP_BASE_THRESHOLD = 81.0  # オープン・L以上（base≤80）
     if current_class and past_races:
         current_base = get_class_base(current_class)
         non_overclass = []
         overclass_excluded = 0
         for pr in past_races:
             pr_base = get_class_base(pr.race_class)
-            # 格上 = pr_baseがcurrent_baseより2.0以上小さい（より強いクラス）
-            # ただし重賞（G3/G2/G1/Jpn系）への挑戦は除外対象外
-            # 重賞挑戦は格上挑戦ではなく実力試しとして扱う
-            is_graded = _detect_grade_key(pr.race_class) in (
-                "G1","G2","G3","Jpn1","Jpn2","Jpn3"
-                # "L"は除外対象外から外す（v1.2修正）
-                # L（リステッド）はOP相当の格上げレースであり、
-                # 1勝クラスからの出走で大敗した場合は格上挑戦として除外対象とする。
-                # G3以上の重賞と違い「実力試し」の意味合いが薄い。
-            )
-            if (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_graded:
-                # 格上クラス（非重賞）で大敗 → 除外
+            is_age_limited_op = getattr(pr, "is_age_limited", False) and _detect_grade_key(pr.race_class) in ("L", "OP", "オープン", "")
+            # 今回クラスと過去走クラスがともにオープン以上なら除外しない
+            both_open = current_base < OP_BASE_THRESHOLD and pr_base < OP_BASE_THRESHOLD
+            is_overclass = (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_age_limited_op and not both_open
+            if is_overclass:
                 overclass_excluded += 1
             else:
                 non_overclass.append(pr)
         if overclass_excluded > 0 and non_overclass:
             past_races = non_overclass
+            past_races_all = list(past_races)
             result.note = (result.note + f" [格上挑戦除外{overclass_excluded}走]").strip()
 
     # ── 各走のポイント計算（最大3走）
@@ -1096,7 +1099,20 @@ def calc_phase1(
             gap = pr.margin  # 直前馬差（秒）でフォールバック
 
         fs = getattr(pr, "field_size", 0)
-        pt = calc_race_point(pr.finish, gap, pr.race_class, pr.weight_carried, fs)
+
+        # ── 馬齢限定L・OPのCLASS_BASE読み替え（v1.2追加）
+        # 2歳・3歳限定のL・OPは同世代内格付けであり、4歳以上混合の格上とは性質が異なる。
+        # CLASS_BASEを今回クラスに揃えることで「同世代で負けた」として適切に評価する。
+        # （例：3歳限定Lで10着 → 1勝クラス10着相当として計算）
+        pr_race_class_for_calc = pr.race_class
+        if getattr(pr, "is_age_limited", False):
+            grade_key = _detect_grade_key(pr.race_class)
+            if grade_key in ("L", "OP", "オープン") or (not grade_key and get_class_base(pr.race_class) < get_class_base(current_class or "1勝クラス")):
+                pr_race_class_for_calc = current_class or pr.race_class
+                if pr.finish >= 6:  # 大敗の場合のみnoteに記録
+                    penalty_notes.append(f"馬齢限定OP読替({pr.race_class[:8]}→{current_class})")
+
+        pt = calc_race_point(pr.finish, gap, pr_race_class_for_calc, pr.weight_carried, fs)
         if pt is not None:
             race_points.append(pt)
             finish_list.append(pr.finish)
@@ -1140,9 +1156,21 @@ def calc_phase1(
         result.note = f"有効走数{result.valid_runs}走"
 
     # ── 近走不振ペナルティ（v1.1：age_limited対応・二重カウント防止）
-    # past_races（障害転向除外・格上挑戦除外済み）を使用
+    # past_races（障害転向除外・格上挑戦除外済み）を使用。
+    # ただし馬齢限定L・OP大敗走（CLASS_BASE読み替え対象）は除外する。
+    # 「同世代格上挑戦の大敗」は近走不振の判定材料にしない。
+    def _is_age_limited_op_loss(pr) -> bool:
+        if not getattr(pr, "is_age_limited", False):
+            return False
+        gk = _detect_grade_key(pr.race_class)
+        is_op_grade = gk in ("L", "OP", "オープン") or (
+            not gk and get_class_base(pr.race_class) < get_class_base(current_class or "1勝クラス")
+        )
+        return is_op_grade and pr.finish >= 6
+
+    past_races_for_form = [pr for pr in past_races if not _is_age_limited_op_loss(pr)]
     form_pen, form_label = calc_recent_form_penalty(
-        past_races, target_distance, target_surface,
+        past_races_for_form, target_distance, target_surface,
         age_limited=age_limited,
     )
     if form_pen > 0:
