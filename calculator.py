@@ -975,23 +975,51 @@ def calc_mixed_sex_bonus(past_races: list, horse_sex: str, current_class: str = 
     #    → 格上挑戦好走は格ボーナスとも二重適用OK
     is_open_grade = current_base <= OP_THRESHOLD
 
-    # scraper側のis_female_onlyフラグ漏れに備えたダブルガード用セット（v1.2修正）
+    import re as _re
+
+    # ── 過去走が「オープン格以上の混合戦」かどうかを判定する2段階フィルター
+    # 【Stage 1】race_classにグレード・OP・L等が明示されているか
+    #   「共同通信杯(G2)」「ホープフルS(G1)」「OP」「オープン」→ OK
+    #   「2歳新馬」「3歳未勝利」「1勝クラス」「白百合S」→ NG（条件戦）
+    # 【Stage 2】牝馬限定レースを除外
+    #   is_female_onlyフラグ + レース名キーワード/セット
+    #
+    # この2段構えで「新馬・未勝利の混合好走が誤カウントされる」バグを根本解決
+
+    def _is_open_grade_race(rc: str) -> bool:
+        """race_classがオープン格（G1〜G3/Jpn/OP/L）の表記を含むかチェック"""
+        # グレード括弧表記：(G1), (G2), (G3), (Jpn1), (Jpn2), (Jpn3), (OP), (L)
+        if _re.search(r'\((G[123]|Jpn[123]|OP|L)\)', rc):
+            return True
+        # 括弧なしの単体表記：「OP」「オープン」「L」「G1」「G2」「G3」等
+        rc_stripped = rc.strip()
+        if rc_stripped in ("OP", "オープン", "L", "G1", "G2", "G3", "Jpn1", "Jpn2", "Jpn3"):
+            return True
+        # GIII/GII/GIのローマ数字表記（_normalize_grade未適用のまま来た場合の保険）
+        if _re.search(r'(GIII|GII|GI|JpnIII|JpnII|JpnI)', rc):
+            return True
+        return False
+
+    # 牝馬限定判定用キーワード（"牝"を含む、またはレース名セットに含まれる）
+    FEMALE_ONLY_KEYWORDS_GUARD = ["牝", "フィリーズ"]
     FEMALE_ONLY_RACE_NAMES_GUARD = {
         "フラワーC", "クイーンC", "フィリーズレビュー", "アネモネS",
         "スイートピーS", "フローラS", "忘れな草賞", "マーメイドS",
         "クイーンS", "紫苑S", "府中牝馬S", "ローズS", "愛知杯",
         "福島牝馬S", "北九州短距離S", "阪神JF", "オークス", "桜花賞",
         "秋華賞", "エリザベス女王杯", "ヴィクトリアマイル", "チューリップ賞",
-        "阪神ジュベナイルフィリーズ",
+        "阪神ジュベナイルフィリーズ", "フェアリーS", "ターコイズS",
     }
-    FEMALE_ONLY_KEYWORDS_GUARD = ["牝", "フィリーズ"]
 
     mixed_good_runs = []
     for pr in past_races:
         if pr.finish <= 0 or pr.finish > 3:
             continue
-        # is_female_onlyフラグ（スクレイパー設定）またはレース名による判定
         rc = pr.race_class
+        # Stage 1: オープン格以上の表記がある走のみ対象（条件戦を確実に除外）
+        if not _is_open_grade_race(rc):
+            continue
+        # Stage 2: 牝馬限定レースを除外
         is_female = (
             getattr(pr, "is_female_only", False)
             or any(kw in rc for kw in FEMALE_ONLY_KEYWORDS_GUARD)
@@ -999,15 +1027,13 @@ def calc_mixed_sex_bonus(past_races: list, horse_sex: str, current_class: str = 
         )
         if is_female:
             continue
-        if pr.race_class in ("新馬", "未勝利"):
-            continue
-        pr_base = get_class_base(pr.race_class)
+        pr_base = get_class_base(rc)
         if is_open_grade:
-            # オープン以上の牝馬限定：オープン以上の混合戦のみ
+            # 今回がオープン以上：過去走もオープン以上（base ≤ OP_THRESHOLD）のみ
             if pr_base > OP_THRESHOLD:
                 continue
         else:
-            # 条件戦の牝馬限定：今回クラス以上（同格or格上）の混合戦
+            # 今回が条件戦：今回クラス以上（同格or格上）の混合戦
             if pr_base > current_base:
                 continue
         mixed_good_runs.append(pr.finish)

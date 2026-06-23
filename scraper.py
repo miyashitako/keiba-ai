@@ -456,7 +456,6 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             # レース名（列4）＋グレードアイコン（spanタグ）を組み合わせてrace_classを構築
             # netkeibaはグレードを<span class="Icon_GradeType1">G1</span>等で付与している
             race_name_cell = cols[4] if len(cols) > 4 else None
-            race_name_text = get(4)
             grade_text = ""
             if race_name_cell:
                 for span in race_name_cell.find_all("span"):
@@ -470,6 +469,16 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
                     if re.match(r"^(G[123]|Jpn[123]|OP|L)$", span_text):
                         grade_text = span_text
                         break
+            # race_name_textはspanを除去したテキストを使う（v1.2修正）
+            # get(4)はspanテキストが連結されるため「2歳未勝利G1」等になってしまう
+            if race_name_cell:
+                import copy as _copy
+                _cell_copy = _copy.copy(race_name_cell)
+                for _s in _cell_copy.find_all("span"):
+                    _s.decompose()
+                race_name_text = _cell_copy.get_text(strip=True)
+            else:
+                race_name_text = get(4)
             # グレードが取れた場合：「レース名(グレード)」形式で保存
             # → _detect_grade_keyがレース名からも正確なグレードを判定できる
             if grade_text:
