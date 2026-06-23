@@ -1003,7 +1003,7 @@ def calc_mixed_sex_bonus(past_races: list, horse_sex: str, current_class: str = 
     # 牝馬限定判定用キーワード（"牝"を含む、またはレース名セットに含まれる）
     FEMALE_ONLY_KEYWORDS_GUARD = ["牝", "フィリーズ"]
     FEMALE_ONLY_RACE_NAMES_GUARD = {
-        "フラワーC", "クイーンC", "フィリーズレビュー", "アネモネS",
+        "エルフィンS", "アルテミスS", "フラワーC", "クイーンC", "フィリーズレビュー", "アネモネS",
         "スイートピーS", "フローラS", "忘れな草賞", "マーメイドS",
         "クイーンS", "紫苑S", "府中牝馬S", "ローズS", "愛知杯",
         "福島牝馬S", "北九州短距離S", "阪神JF", "オークス", "桜花賞",
