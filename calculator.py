@@ -614,6 +614,7 @@ def calc_distance_aptitude_bonus(
     target_distance: int,
     was_fallback: bool = False,   # 引数互換維持（内部では未使用）
     target_surface: str = "",     # 芝ダ違いペナルティ用（v1.0追加）
+    all_past_races: list = None,  # 芝ダフィルター前の全走（芝ダ転向判定用・v1.2追加）
 ) -> tuple[float, str]:
     """
     距離適性ボーナスを計算して返す（v1.0改訂）。
@@ -625,7 +626,9 @@ def calc_distance_aptitude_bonus(
     ④ スタミナ証明（今回距離+400m超の完走実績）
     ⑤ 芝ダ違いペナルティ（今回と異なる芝ダの走しかない場合）
     """
-    if target_distance <= 0 or not past_races:
+    # past_racesが空でもall_past_racesがあれば芝ダ初挑戦判定のために処理継続
+    _has_any_races = past_races or (all_past_races is not None and all_past_races)
+    if target_distance <= 0 or not _has_any_races:
         return (0.0, "")
 
     # ── ① ② 距離帯好走実績
@@ -681,24 +684,76 @@ def calc_distance_aptitude_bonus(
         max_dist = max(pr.distance for pr in stamina_races)
         stamina_label = f"スタミナ証明({max_dist}m):{stamina_bonus:+.2f}"
 
-    # ── ⑤ 芝ダ転向ペナルティ/ボーナス（v1.1改訂）
+    # ── ⑤ 芝ダ転向ペナルティ/ボーナス（v1.1改訂 / v1.2修正）
     # 初挑戦（同じ芝ダの過去走ゼロ）: -1.5pt（ペナルティ）
     # 同じ芝ダで好走（3着以内）あり : +1.2pt（ボーナス）
     # 同じ芝ダで過去走あり・好走なし: 0pt
+    #
+    # ※ 判定は芝ダフィルター前の全走（all_past_races）で行う。
+    #   past_racesは芝ダフィルター後のため、同じ芝ダの走しか含まれず
+    #   「初挑戦」判定が常にFalseになる問題を修正（v1.2）。
     surface_penalty = 0.0
     surface_label = ""
-    if target_surface and past_races:
-        same_surf      = [pr for pr in past_races if pr.surface == target_surface]
-        same_surf_good = [pr for pr in same_surf  if 1 <= pr.finish <= 3]
+    _surf_base = all_past_races if (all_past_races is not None) else past_races
+    if target_surface and (_surf_base or past_races):
+        same_surf      = [pr for pr in _surf_base if pr.surface == target_surface]
+        same_surf_good = [pr for pr in same_surf   if 1 <= pr.finish <= 3]
         other_surf = "ダ" if target_surface == "芝" else "芝"
         if not same_surf:
-            # 初挑戦
+            # 初挑戦（同じ芝ダの過去走ゼロ）
             surface_penalty = -1.5
             surface_label = f"{other_surf}→{target_surface}初挑戦:-1.5"
         elif same_surf_good:
-            # 同じ芝ダで好走実績あり
-            surface_penalty = 1.2
-            surface_label = f"{target_surface}好走実績:+1.2"
+            # 今回芝ダで好走実績あり → ラベルを転向か好走かで分ける
+            # 直前走（最新走）が今回と同じ芝ダかどうかで判断
+            #   直前走が異なる芝ダ → 転向（例：芝→芝→ダ（好走）今回ダ）
+            #   直前走が同じ芝ダ   → 好走実績（例：ダ→芝（好走）→芝 今回芝 = 定着）
+            # また「戻し」パターン（芝→ダ→ダ今回芝）も好走実績ボーナスのみ：
+            #   直前走が今回と異なる芝ダ かつ 直前1走のみが異なる → 転向
+            #   直前走が今回と異なる芝ダ かつ 直前2走以上が異なる → 戻し（ボーナスなし）
+            recent3 = _surf_base[-3:]   # 直前3走（古い順）
+            last_surf = _surf_base[-1].surface if _surf_base else target_surface
+            other_recent_count = sum(1 for pr in recent3 if pr.surface == other_surf)
+
+            # 判定軸（直近3走の構成で分類）：
+            # 「今回surf=T、other_surf=D」として表記
+            # ① 転向：直近走がD（=other）かつ直近3走でDが1走のみ
+            #    = 「T→T→D（好走）今回T」→ 転向+1.2
+            #    ※ 直近走がDで、その前は基本Tだった → 転向成功
+            # ② 定着：直近走がT（=target）かつ直近3走にDが1走以上
+            #    = 「T→D（好走）→T 今回T」→ 好走実績+1.2
+            #    ※ Dを経験して今回Tに定着 → 好走実績
+            # ③ 試し：直近走がD かつ 直近3走でDが2走以上
+            #    = 「T→D→D 今回T（戻し）」または「D→D→T（試し）今回D」→ なし
+            # ④ ずっとT：other_recent_count==0 → なし
+
+            recent3 = _surf_base[-3:]
+            last_surf = _surf_base[-1].surface if _surf_base else target_surface
+            other_recent_count = sum(1 for pr in recent3 if pr.surface == other_surf)
+            same_recent_count  = sum(1 for pr in recent3 if pr.surface == target_surface)
+
+            # 転向判定：直近3走中2走以上が異なる芝ダ
+            # 意図：近走不振が「異なる芝ダへの挑戦」由来である可能性を評価。
+            #       芝ダフィルターで除外される走が多い = 近走avgが不当に悪化しているケース。
+            #       「今回の芝ダでの好走実績」は①②距離好走ボーナスで別途評価済みのため
+            #       ここでは転向判定のみ行い、好走実績ボーナスは付与しない（v1.2整理）。
+            #
+            # 転向パターン例：
+            #   芝→芝→ダ（好走）今回ダ = other_recent_count=2 → 転向+1.2
+            #   ダ→ダ→芝（好走）今回芝 = other_recent_count=2 → 転向+1.2
+            # 非転向パターン（なし）：
+            #   芝→ダ→ダ 今回芝（戻し）= other_recent_count=1 → なし
+            #   ダ→ダ→芝 今回ダ（試し）= other_recent_count=1 → なし
+            #   芝→芝→芝 今回芝        = other_recent_count=0 → なし
+            # 転向：「直前走が今回surfと同じ」かつ「直近3走中2走以上が異なる芝ダ」
+            # 直前走が今回surfと同じ = 転向してきた先に今いる状態
+            # other_recent_count >= 2 = 直近走の大半が異なる芝ダだった
+            # 例：芝→芝→ダ（好走）今回ダ → 直前走=ダ=今回ダ、other(芝)=2走 → 転向✅
+            # 例：芝→ダ→ダ 今回芝（戻し）→ 直前走=ダ≠今回芝 → 転向❌
+            if last_surf == target_surface and other_recent_count >= 2:
+                surface_penalty = 1.2
+                surface_label = f"{other_surf}→{target_surface}転向:+1.2"
+            # else: 転向非該当（試し・戻し・ずっと同じ芝ダ）→ なし
 
     # ── ⑥ 距離ミスマッチペナルティ（v1.2：乖離率ベース）
     # 乖離率 = |過去走距離 - 今回距離| ÷ 今回距離
@@ -1340,6 +1395,7 @@ def calc_phase1(
         dist_bonus, dist_label = calc_distance_aptitude_bonus(
             past_races_all, target_distance,
             target_surface=target_surface,
+            all_past_races=_all_for_interval,  # 芝ダフィルター前の全走
         )
         result.phase1_score = round(result.phase1_score - dist_bonus, 3)
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)
