@@ -258,7 +258,14 @@ if fetch_btn:
 
 if st.session_state.race_info:
     ri: RaceInfo = st.session_state.race_info
-    st.subheader(f"📋 {ri.race_name}　{ri.race_date}　{ri.venue}")
+    # race_idの末尾2桁がレース番号
+    _race_no_disp = ""
+    if ri.race_id:
+        try:
+            _race_no_disp = f"　{int(ri.race_id[-2:])}R"
+        except Exception:
+            pass
+    st.subheader(f"📋 {ri.race_name}{_race_no_disp}　{ri.race_date}　{ri.venue}")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("距離",   f"{ri.surface}{ri.distance}m" if ri.distance else "—")
     col2.metric("競馬場", ri.venue or "—")
@@ -464,43 +471,75 @@ if st.session_state.phase2_results:
             st.markdown(f"🎯 注目: {top_str}")
 
     # ④ Phase5
-    st.header("④ Phase5 人間確認（パドック・馬場）")
-    with st.expander("パドック評価・馬場バイアスを入力する", expanded=False):
+    st.header("④ Phase5 人間確認（パドック・調教・馬場）")
+    with st.expander("パドック・調教評価・馬場バイアスを入力する", expanded=False):
         track_bias = st.selectbox("馬場バイアス", ["フラット", "内有利", "外有利"], key="track_bias_select")
-        st.write("**パドック評価**（◎ ○ △ × から選択）")
+        st.write("**各馬評価**（◎ ○ × から選択）")
 
         paddock_ratings = {}
+        training_ratings = {}   # v1.2追加：調教評価
         frame_positions = {}
         muddy_ratings = {}
 
         # ヘッダー行
-        h1, h2, h3, h4 = st.columns([2, 2, 2, 2])
+        h1, h2, h3, h4, h5 = st.columns([3, 2, 2, 2, 2])
         h2.caption("パドック")
-        h3.caption("枠位置")
-        h4.caption("重馬場")
+        h3.caption("調教")
+        h4.caption("枠位置")
+        h5.caption("重馬場")
 
-        for r in ranking:
-            c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+        # 全馬を馬番順で表示（rankingではなくhorsesから取得）
+        all_horses_sorted = sorted(
+            st.session_state.horses,
+            key=lambda h: h.number
+        )
+        for h in all_horses_sorted:
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             with c1:
-                st.write(f"**{r.horse_number}番 {r.horse_name}**")
+                st.write(f"**{h.number}番 {h.name}**")
             with c2:
-                paddock = st.selectbox("パドック", ["—","◎","○","△","×"],
-                    key=f"p5_paddock_{r.horse_number}_{r.horse_name}", label_visibility="collapsed")
-                paddock_ratings[r.horse_number] = paddock
+                paddock = st.selectbox("パドック", ["—", "◎", "○", "×"],
+                    key=f"p5_paddock_{h.number}_{h.name}", label_visibility="collapsed")
+                paddock_ratings[h.number] = paddock
             with c3:
-                pos = st.selectbox("枠位置", ["—","内","外"],
-                    key=f"p5_pos_{r.horse_number}_{r.horse_name}", label_visibility="collapsed")
-                if pos != "—":
-                    frame_positions[r.horse_number] = pos
+                training = st.selectbox("調教", ["—", "◎", "○", "×"],
+                    key=f"p5_training_{h.number}_{h.name}", label_visibility="collapsed")
+                training_ratings[h.number] = training
             with c4:
-                muddy = st.selectbox("重馬場", ["—","得意","不得意"],
-                    key=f"p5_muddy_{r.horse_number}_{r.horse_name}", label_visibility="collapsed")
-                muddy_ratings[r.horse_number] = muddy
+                pos = st.selectbox("枠位置", ["—", "内", "外"],
+                    key=f"p5_pos_{h.number}_{h.name}", label_visibility="collapsed")
+                if pos != "—":
+                    frame_positions[h.number] = pos
+            with c5:
+                muddy = st.selectbox("重馬場", ["—", "得意", "不得意"],
+                    key=f"p5_muddy_{h.number}_{h.name}", label_visibility="collapsed")
+                muddy_ratings[h.number] = muddy
 
         if st.button("✅ Phase5補正を適用", type="primary", key="apply_phase5_btn"):
             # 常にphase3_resultsキャッシュ（Phase3済み）にPhase5を上乗せ
             p3_base = st.session_state.phase3_results
-            adjusted = apply_phase5(p3_base, paddock_ratings, track_bias, frame_positions, muddy_ratings)
+            # 調教評価をパドック評価と同スケールで合算
+            # ◎:+2.0 / ○:+1.0 / ×:-2.0 でパドック評価に足す
+            TRAINING_SCORE = {"◎": 2.0, "○": 1.0, "×": -2.0}
+            combined_paddock = dict(paddock_ratings)
+            for hn, tr in training_ratings.items():
+                tr_pt = TRAINING_SCORE.get(tr, 0.0)
+                if tr_pt == 0.0:
+                    continue
+                # パドック未入力の馬は調教のみ適用
+                # パドック入力済みの場合は合算（上限・下限なし）
+                pd_label = combined_paddock.get(hn, "—")
+                PD_SCORE = {"◎": 2.0, "○": 1.0, "△": 0.0, "×": -2.0}
+                pd_pt = PD_SCORE.get(pd_label, 0.0)
+                total_pt = pd_pt + tr_pt
+                # 合算値を疑似ラベルとしてそのままphase5に渡す代わりに
+                # paddock_ratingsの値を合計ptで上書き（apply_phase5が数値対応の場合）
+                # → apply_phase5がラベル文字列のみ対応の場合は別途数値を渡す
+                combined_paddock[hn] = ("◎" if total_pt >= 3.5
+                                        else "○" if total_pt >= 1.5
+                                        else "×" if total_pt <= -1.5
+                                        else "—")
+            adjusted = apply_phase5(p3_base, combined_paddock, track_bias, frame_positions, muddy_ratings)
             if use_phase2:
                 st.session_state.phase2_results = adjusted
             else:
