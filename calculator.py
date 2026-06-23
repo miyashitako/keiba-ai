@@ -700,68 +700,85 @@ def calc_distance_aptitude_bonus(
             surface_penalty = 1.2
             surface_label = f"{target_surface}好走実績:+1.2"
 
-    # ── ⑥ 距離ミスマッチペナルティ（v1.1追加）
-    # 今回距離との乖離が大きく、かつ近距離帯の好走実績がない場合にペナルティ
-    # ただし「その距離帯での成績が悪い（avg≥6.0）」場合は距離変更歓迎とみなして免除
+    # ── ⑥ 距離ミスマッチペナルティ（v1.2：乖離率ベース）
+    # 乖離率 = |過去走距離 - 今回距離| ÷ 今回距離
+    # ±25%以内の好走実績なし かつ 乖離率≥50% → -3.0pt（重度）
+    # ±25%以内の好走実績なし かつ 乖離率≥25% → -1.5pt（中程度）
+    # ±50%以内の好走実績あれば 重度→中程度に緩和
+    # ただし「従来距離帯でavg≥6.0（苦手）」の場合は距離変更歓迎とみなして免除
     dist_mismatch_penalty = 0.0
     dist_mismatch_label = ""
     if target_distance > 0 and past_races:
-        # 今回±400m以内の好走実績（3着以内）
-        near_400 = [pr for pr in past_races
-                    if abs(pr.distance - target_distance) <= 400 and 1 <= pr.finish <= 3]
-        # 今回±800m以内の好走実績
-        near_800 = [pr for pr in past_races
-                    if abs(pr.distance - target_distance) < 800 and 1 <= pr.finish <= 3]
-        # 最も今回距離に近い過去走の距離差
-        if past_races:
-            min_diff = min(abs(pr.distance - target_distance) for pr in past_races if pr.distance > 0)
+        # 乖離率の閾値（25%・50%）を絶対距離に換算
+        threshold_near  = target_distance * 0.25   # ±25%
+        threshold_mid   = target_distance * 0.50   # ±50%
+
+        # ±25%以内の好走実績（3着以内）
+        near_25pct = [pr for pr in past_races
+                      if abs(pr.distance - target_distance) <= threshold_near
+                      and 1 <= pr.finish <= 3]
+        # ±50%以内の好走実績（緩和判定用）
+        near_50pct = [pr for pr in past_races
+                      if abs(pr.distance - target_distance) <= threshold_mid
+                      and 1 <= pr.finish <= 3]
+
+        # 最も今回距離に近い過去走の乖離率
+        valid_dists = [pr for pr in past_races if pr.distance > 0]
+        if valid_dists:
+            min_diff    = min(abs(pr.distance - target_distance) for pr in valid_dists)
+            min_rate    = min_diff / target_distance   # 乖離率（0.0〜）
         else:
-            min_diff = 9999
+            min_diff    = 9999
+            min_rate    = 9.99
 
         # ── 距離変更歓迎チェック
-        # 今回距離より400m以上離れた距離帯での平均着順（苦手距離の判定）
+        # 今回距離より±25%超離れた距離帯での平均着順（苦手距離の判定）
         longer_dist_races  = [pr for pr in past_races
-                              if pr.distance - target_distance >= 400 and pr.finish > 0]
+                              if pr.distance - target_distance > threshold_near and pr.finish > 0]
         shorter_dist_races = [pr for pr in past_races
-                              if target_distance - pr.distance >= 400 and pr.finish > 0]
+                              if target_distance - pr.distance > threshold_near and pr.finish > 0]
         avg_longer  = (sum(pr.finish for pr in longer_dist_races)  / len(longer_dist_races)
                        if longer_dist_races  else 0.0)
         avg_shorter = (sum(pr.finish for pr in shorter_dist_races) / len(shorter_dist_races)
                        if shorter_dist_races else 0.0)
 
         # 距離変更歓迎条件：
-        #   ±400m以内の好走実績なし（距離転換）
-        #   かつ 従来の距離帯（400m以上離れた方）でavg≥6.0（苦手だった）
-        #   かつ 今回距離が最近走距離より短縮 or 延長になっている
+        #   ±25%以内の好走実績なし（距離転換）
+        #   かつ 従来の距離帯（±25%超の方）でavg≥6.0（苦手だった）
         is_shortening = (longer_dist_races  and not shorter_dist_races and avg_longer  >= 6.0)
         is_extending  = (shorter_dist_races and not longer_dist_races  and avg_shorter >= 6.0)
         avg_prev = avg_longer if is_shortening else avg_shorter if is_extending else 0.0
-        is_welcome = not near_400 and (is_shortening or is_extending)
+        is_welcome = not near_25pct and (is_shortening or is_extending)
 
         if is_welcome:
             # 距離変更歓迎ボーナス：苦手距離から適性距離への転換
             dist_mismatch_penalty = 0.5   # スコアを下げる（有利方向）
             dist_mismatch_label = f"距離変更歓迎(avg{avg_prev:.1f}着):-0.5"
 
-        elif not near_400 and min_diff >= 800:
-            # ±400m以内好走実績なし、かつ800m超乖離（歓迎条件非該当）
-            # 距離変更歓迎チェック用：±400m超の全距離帯での平均着順
+        elif not near_25pct and min_rate >= 0.25:
+            # ±25%以内好走実績なし かつ 乖離率≥25%（歓迎条件非該当）
+            # まず歓迎（広義）チェック：±25%超の全距離帯での平均着順
             prev_dist_races = [pr for pr in past_races
-                               if abs(pr.distance - target_distance) > 400 and pr.finish > 0]
+                               if abs(pr.distance - target_distance) > threshold_near and pr.finish > 0]
             avg_finish_prev = (sum(pr.finish for pr in prev_dist_races) / len(prev_dist_races)
                                if prev_dist_races else 0.0)
             if avg_finish_prev >= 6.0:
                 # 距離変更歓迎（広義）：ペナルティ免除＋軽微ボーナス
                 dist_mismatch_penalty = 0.5
                 dist_mismatch_label = f"距離変更歓迎(avg{avg_finish_prev:.1f}着):-0.5"
-            elif not near_800 and min_diff >= 1200:
-                # 重度ミスマッチ
-                dist_mismatch_penalty = -3.0
-                dist_mismatch_label = f"距離ミスマッチ({min_diff}m差):-3.0"
+            elif min_rate >= 0.50:
+                if near_50pct:
+                    # ±50%以内好走あり → 重度を中程度に緩和
+                    dist_mismatch_penalty = -1.5
+                    dist_mismatch_label = f"距離ミスマッチ({min_rate*100:.0f}%乖離・緩和):-1.5"
+                else:
+                    # 重度ミスマッチ
+                    dist_mismatch_penalty = -3.0
+                    dist_mismatch_label = f"距離ミスマッチ({min_rate*100:.0f}%乖離):-3.0"
             else:
-                # 中程度ミスマッチ
+                # 中程度ミスマッチ（25%以上50%未満）
                 dist_mismatch_penalty = -1.5
-                dist_mismatch_label = f"距離ミスマッチ({min_diff}m差):-1.5"
+                dist_mismatch_label = f"距離ミスマッチ({min_rate*100:.0f}%乖離):-1.5"
 
     total_bonus = good_finish_bonus + stamina_bonus + surface_penalty + dist_mismatch_penalty
 
@@ -958,11 +975,29 @@ def calc_mixed_sex_bonus(past_races: list, horse_sex: str, current_class: str = 
     #    → 格上挑戦好走は格ボーナスとも二重適用OK
     is_open_grade = current_base <= OP_THRESHOLD
 
+    # scraper側のis_female_onlyフラグ漏れに備えたダブルガード用セット（v1.2修正）
+    FEMALE_ONLY_RACE_NAMES_GUARD = {
+        "フラワーC", "クイーンC", "フィリーズレビュー", "アネモネS",
+        "スイートピーS", "フローラS", "忘れな草賞", "マーメイドS",
+        "クイーンS", "紫苑S", "府中牝馬S", "ローズS", "愛知杯",
+        "福島牝馬S", "北九州短距離S", "阪神JF", "オークス", "桜花賞",
+        "秋華賞", "エリザベス女王杯", "ヴィクトリアマイル", "チューリップ賞",
+        "阪神ジュベナイルフィリーズ",
+    }
+    FEMALE_ONLY_KEYWORDS_GUARD = ["牝", "フィリーズ"]
+
     mixed_good_runs = []
     for pr in past_races:
         if pr.finish <= 0 or pr.finish > 3:
             continue
-        if getattr(pr, "is_female_only", False):
+        # is_female_onlyフラグ（スクレイパー設定）またはレース名による判定
+        rc = pr.race_class
+        is_female = (
+            getattr(pr, "is_female_only", False)
+            or any(kw in rc for kw in FEMALE_ONLY_KEYWORDS_GUARD)
+            or any(name in rc for name in FEMALE_ONLY_RACE_NAMES_GUARD)
+        )
+        if is_female:
             continue
         if pr.race_class in ("新馬", "未勝利"):
             continue

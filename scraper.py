@@ -64,7 +64,6 @@ class PastRace:
     corner_pos: str = ""      # コーナー通過順位（v1.1追加）例："10-9", "3-3-4-4"
     race_day: int = 0         # 開催日次（v1.1追加）例：3東京2→2、開幕週判定用
     is_female_only: bool = False  # 牝馬限定戦フラグ（v1.1追加）
-    is_age_limited: bool = False  # 馬齢限定戦フラグ（v1.2追加：2歳・3歳限定）
 
 
 @dataclass
@@ -362,12 +361,22 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
         # 騎手・斤量・性別（列4）
         # 列4の形式: "牡5鹿岩田望58.0" → 先頭1文字が性別
         jockey_cell_text = cols[4].get_text(strip=True)
+        # ── 診断ログ用：列4の生テキストを記録（エラー調査用）
+        _col4_raw = repr(jockey_cell_text)  # 不可視文字も見えるようにrepr
+        horse._col4_raw = _col4_raw         # Horseオブジェクトに付与（後でデバッグパネルに使用）
         # 性別判定：牡/牝/セ（騸馬、netkeibaはカタカナ表記）
         if jockey_cell_text:
             if jockey_cell_text[0] in ("牡", "牝"):
                 horse.sex = jockey_cell_text[0]
             elif jockey_cell_text[0] in ("セ", "騸"):
                 horse.sex = "セ"
+            else:
+                # 先頭が性別文字でない場合：HTML構造変化の可能性
+                # 空白・記号・数字などが入っていたらログに残す
+                horse.sex = ""
+                horse._sex_parse_warning = (
+                    f"列4先頭が性別文字でない: {_col4_raw[:40]}"
+                )
 
         # 斤量（末尾の数値）
         wc_match = re.search(r"(\d{2,3}(?:\.\d)?)\s*$", jockey_cell_text)
@@ -484,22 +493,23 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             field_nums = re.findall(r"\d+", field_str)
             pr.field_size = int(field_nums[0]) if field_nums else 0
 
-            # 牝馬限定戦フラグ（v1.1追加）
-            # レース名に「牝」「牝馬」「フィリーズ」「オークス」等が含まれる場合
+            # 牝馬限定戦フラグ（v1.1追加 / v1.2修正：漏れレース名追加）
+            # キーワード方式（「牝」等の文字を含む）＋著名牝馬限定レース名セット
             rc_for_female = pr.race_class
             FEMALE_ONLY_KEYWORDS = ["牝", "フィリーズ", "オークス", "エリザベス女王杯",
                                     "ヴィクトリアマイル", "阪神ジュベナイルフィリーズ",
                                     "桜花賞", "秋華賞", "チューリップ賞"]
-            pr.is_female_only = any(kw in rc_for_female for kw in FEMALE_ONLY_KEYWORDS)
-
-            # 馬齢限定戦フラグ（v1.2追加）
-            # 「2歳」を含む → 常に馬齢限定
-            # 「3歳」を含む かつ「以上」を含まない → 馬齢限定
-            # 「3歳以上」→ 混合戦のため限定ではない
-            rc = pr.race_class
-            is_2yo = "2歳" in rc
-            is_3yo_limited = "3歳" in rc and "以上" not in rc
-            pr.is_age_limited = is_2yo or is_3yo_limited
+            # キーワードでは拾えない牝馬限定レース名を別途チェック
+            FEMALE_ONLY_RACE_NAMES_PAST = {
+                "フラワーC", "クイーンC", "フィリーズレビュー", "アネモネS",
+                "スイートピーS", "フローラS", "忘れな草賞", "マーメイドS",
+                "クイーンS", "紫苑S", "府中牝馬S", "ローズS", "愛知杯",
+                "福島牝馬S", "北九州短距離S", "阪神JF",
+            }
+            pr.is_female_only = (
+                any(kw in rc_for_female for kw in FEMALE_ONLY_KEYWORDS)
+                or any(name in rc_for_female for name in FEMALE_ONLY_RACE_NAMES_PAST)
+            )
 
             # コーナー通過順位（列25）v1.1追加
             pr.corner_pos = get(25) if len(cols) > 25 else ""
