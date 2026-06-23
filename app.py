@@ -361,12 +361,13 @@ if st.session_state.phase2_results:
         _all_styles = [(n, s) for n, s in _styles.items() if s]
         _field_size = len(st.session_state.horses)
 
-        # 開催週・コース替わりの入力
-        with st.expander("📅 展開設定（開催週・コース替わり）", expanded=False):
-            _cols = st.columns(2)
-            _race_week   = _cols[0].number_input("開催週（1=開幕週）", min_value=1, max_value=8,
-                                                  value=1, step=1, key="pace_race_week")
-            _course_chg  = _cols[1].checkbox("コース替わり初週", value=False, key="pace_course_change")
+        # 開催週は開催日から自動計算（v1.2：手動入力廃止）
+        # 1・2日目→1週目、3・4日目→2週目、…（ceil(nichime/2)）
+        import math as _math
+        _race_week = _math.ceil(nichime / 2)  # 1-2日目→1週目、3-4日目→2週目…
+        with st.expander("📅 展開設定（コース替わり）", expanded=False):
+            st.caption(f"開催週：{_race_week}週目（{nichime}日目より自動計算）")
+            _course_chg = st.checkbox("コース替わり初週", value=False, key="pace_course_change")
             st.caption("開幕週・コース替わりは逃げ先行有利、4週目以降は差し追込有利の補正が入ります")
 
         _adjusted = []
