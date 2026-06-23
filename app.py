@@ -498,20 +498,20 @@ if st.session_state.phase2_results:
             with c1:
                 st.write(f"**{h.number}番 {h.name}**")
             with c2:
-                paddock = st.selectbox("パドック", ["—", "◎", "○", "×"],
+                paddock = st.selectbox("パドック", ["パドック—", "◎", "○", "×"],
                     key=f"p5_paddock_{h.number}_{h.name}", label_visibility="collapsed")
                 paddock_ratings[h.number] = paddock
             with c3:
-                training = st.selectbox("調教", ["—", "◎", "○", "×"],
+                training = st.selectbox("調教", ["調教—", "◎", "○", "×"],
                     key=f"p5_training_{h.number}_{h.name}", label_visibility="collapsed")
                 training_ratings[h.number] = training
             with c4:
-                pos = st.selectbox("枠位置", ["—", "内", "外"],
+                pos = st.selectbox("枠位置", ["枠—", "内", "外"],
                     key=f"p5_pos_{h.number}_{h.name}", label_visibility="collapsed")
-                if pos != "—":
+                if pos not in ("—", "枠—"):
                     frame_positions[h.number] = pos
             with c5:
-                muddy = st.selectbox("重馬場", ["—", "得意", "不得意"],
+                muddy = st.selectbox("重馬場", ["馬場—", "得意", "不得意"],
                     key=f"p5_muddy_{h.number}_{h.name}", label_visibility="collapsed")
                 muddy_ratings[h.number] = muddy
 
@@ -528,7 +528,7 @@ if st.session_state.phase2_results:
                     continue
                 # パドック未入力の馬は調教のみ適用
                 # パドック入力済みの場合は合算（上限・下限なし）
-                pd_label = combined_paddock.get(hn, "—")
+                pd_label = combined_paddock.get(hn, "パドック—")
                 PD_SCORE = {"◎": 2.0, "○": 1.0, "△": 0.0, "×": -2.0}
                 pd_pt = PD_SCORE.get(pd_label, 0.0)
                 total_pt = pd_pt + tr_pt
