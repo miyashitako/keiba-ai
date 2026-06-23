@@ -2016,16 +2016,25 @@ def calc_pace_bias_bonus(
         is_opening = (race_week == 1) or course_change
         is_worn    = (race_week >= 4)
 
-        if is_opening and is_front:
-            bonus += V["medium"]
-            notes.append("開幕週/コース替逃先:有利")
+        if is_opening:
+            if is_front:
+                bonus += V["medium"]
+                notes.append("開幕週/コース替逃先:有利")
+            else:
+                # 差し・追込は不利方向ではないが開幕週情報をメモに記録
+                notes.append(f"開幕週({race_week}週目)")
         if is_worn:
+            # 4週目以降は脚質に関係なくメモに記録（差追有利・逃げ不利の根拠）
+            week_note = f"{race_week}週目(馬場荒れ)"
             if is_behind:
                 bonus += V["small"]
-                notes.append("馬場荒れ差追:有利")
-            if is_nige:
+                notes.append(f"{week_note}差追:有利")
+            elif is_nige:
                 bonus -= V["small"]
-                notes.append("馬場荒れ逃げ:不利")
+                notes.append(f"{week_note}逃げ:不利")
+            else:
+                # 先行・その他：数値補正なしだがメモに週数を記録
+                notes.append(week_note)
 
     label = "/".join(notes) if notes else ""
     return (round(bonus, 3), label)

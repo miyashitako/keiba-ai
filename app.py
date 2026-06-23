@@ -151,9 +151,9 @@ st.caption(f"🔗 `{race_id}`　{race_url_generated}")
 
 # ── 検証モード & URL直接入力（折りたたみ） ───────
 with st.expander("🔬 検証モード・URL直接入力（上級設定）", expanded=False):
-    st.caption("**検証モード**：過去に終了したレースで検証する場合、除外走数を1以上に設定すると先頭N走をスキップします。")
-    skip_runs = st.slider("直近N走を除外する", min_value=0, max_value=3, value=0, step=1,
-                          key="skip_runs_slider")
+    st.caption("**検証モード**：過去レースで検証する場合、ONにすると直近1走を除外してスコアを計算します。")
+    _skip_toggle = st.checkbox("直近1走を除外する（検証モード）", value=False, key="skip_runs_slider")
+    skip_runs = 1 if _skip_toggle else 0
     st.divider()
     st.caption("**URL直接入力**：URLを直接貼り付ける場合はこちら（プルダウン設定より優先）")
     race_url_manual = st.text_input(
@@ -185,7 +185,7 @@ if fetch_btn:
             st.session_state["classic_distance_auto"] = race_info.is_classic_distance
 
             # Phase1（検証モード：先頭skip_runs走をスキップ）
-            _skip = st.session_state.get("skip_runs_slider", 0)
+            _skip = 1 if st.session_state.get("skip_runs_slider", False) else 0
             _age  = st.session_state.get("age_limited_toggle", race_info.is_age_limited)
             _cls  = race_info.is_classic_distance
             p1_results = [
