@@ -464,27 +464,59 @@ def calc_grade_bonus(
     """
     全過去走から格戦ボーナスを集計して返す。
 
-    age_limited=True（馬齢限定戦モード）の場合（v1.1改訂）：
-      OP/L/G3/G2/Jpn2/Jpn3 -> base=1.0 で横並び評価
-      G1/Jpn1               -> base=1.2（G1だけ微差で別格）
-      着順スケールは通常モードと共通（1着1.0 / 2着0.8 / 3着0.6 / 4着0.4）
-      理由：2〜3歳馬はOP以上で走った実績の有無が重要だが、
-            G1好走は他グレードと比べ価値がわずかに高い。
-            OP/G2の差はこの時点では小さいため同値とする。
+    age_limited=True（馬齢限定戦モード）の場合（v1.2改訂）：
+      G1/Jpn1               -> base=2.0（G1は別格）
+      G2/Jpn2               -> base=0.9
+      G3/Jpn3/OP/L          -> base=0.8（横並び）
+      時系列加重：past_racesのインデックス順（0=直近）で係数を掛ける
+        [1.0, 0.7, 0.5, 0.3, 0.2, 0.1, ...]
+      同一グレード内の逓減は廃止し時系列加重に一本化。
+      理由：古い実績ほど現在の力量を反映しないため直近重視。
+            G1とそれ以下の格差を明確化（従来G1=1.2は小さすぎた）。
 
     classic_distance=True（秋華賞・菊花賞等）の場合：
       age_limitedに加え「3勝クラス」もOPと同格扱い。
-    """
-    # 馬齢限定戦モード：グレード -> base値マッピング（v1.1）
-    AGE_LIMITED_BASE = {
-        "G1":      1.2, "Jpn1": 1.2,
-        "G2":      1.0, "Jpn2": 1.0,
-        "G3":      1.0, "Jpn3": 1.0,
-        "OP":      1.0, "オープン": 1.0,
-        "L":       1.0,
-    }
 
-    # 同一グレードの好走を逓減合算（v1.1）
+    age_limited=False（通常モード）の場合：
+      グレード別base＋同一グレード内逓減（変更なし）。
+    """
+    # ── 馬齢限定戦モード（v1.2：時系列加重方式）──────────────────
+    if age_limited:
+        AGE_LIMITED_BASE = {
+            "G1": 2.0, "Jpn1": 2.0,
+            "G2": 0.9, "Jpn2": 0.9,
+            "G3": 0.8, "Jpn3": 0.8,
+            "OP": 0.8, "オープン": 0.8,
+            "L":  0.8,
+        }
+        # classic_distance=True：3勝クラスもOP扱い
+        if classic_distance:
+            AGE_LIMITED_BASE["3勝クラス"] = 0.8
+            AGE_LIMITED_BASE["1600万下"] = 0.8
+
+        # 時系列加重テーブル（インデックス0=直近）
+        TIME_WEIGHTS = [1.0, 0.7, 0.5, 0.3, 0.2, 0.1]
+
+        total = 0.0
+        for idx, pr in enumerate(past_races):
+            if pr.finish <= 0 or pr.finish > 4:
+                continue
+            gkey = _detect_grade_key(pr.race_class)
+            if not gkey:
+                # classic_distance時の3勝クラス判定
+                if classic_distance:
+                    if get_class_base(pr.race_class) == 84.0:  # 3勝クラス
+                        gkey = "3勝クラス"
+                if not gkey:
+                    continue
+            base   = AGE_LIMITED_BASE.get(gkey, 0.8)
+            scale  = GRADE_RANK_SCALE.get(pr.finish, 0.4)
+            t_w    = TIME_WEIGHTS[idx] if idx < len(TIME_WEIGHTS) else TIME_WEIGHTS[-1]
+            total += base * scale * t_w
+        return round(total, 4)
+
+    # ── 通常モード（変更なし）─────────────────────────────────────
+    # 同一グレードの好走を逓減合算
     # 1本目100%、2本目50%、3本目以降25%
     DECAY_RATES = [1.0, 0.5, 0.25]
 
@@ -503,10 +535,7 @@ def calc_grade_bonus(
     total = 0.0
     for gkey, finishes in grade_runs.items():
         finishes_sorted = sorted(finishes)  # 着順昇順（最良から）
-        if age_limited:
-            base = AGE_LIMITED_BASE.get(gkey, 1.0)
-        else:
-            base = GRADE_BONUS_TABLE.get(gkey, 0.0)
+        base = GRADE_BONUS_TABLE.get(gkey, 0.0)
         for i, rank in enumerate(finishes_sorted):
             decay = DECAY_RATES[i] if i < len(DECAY_RATES) else DECAY_RATES[-1]
             scale = GRADE_RANK_SCALE.get(rank, 0.4)
