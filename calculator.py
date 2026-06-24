@@ -1910,8 +1910,9 @@ def calc_pace_bias_bonus(
     race_distance: int,
     race_direction: str,    # "右"/"左"/"右外"/"左外" など
     track_cond: str,        # "良"/"稍重"/"重"/"不良"
-    race_week: int,         # 開催週（1=開幕週, 4以上=荒れ馬場）
-    course_change: bool,    # コース替わり初週フラグ
+    race_week: int,         # 開催週（1=開幕週, 3以上=荒れ馬場）
+    course_change: bool,    # コース替わり初週フラグ（芝回復→逃先有利・is_wornを無効化）
+    continuous_meet: bool = False,  # 連続開催フラグ（前開催から継続→週数無関係でis_worn扱い）
 ) -> tuple[float, str]:
     """
     展開・トラックバイアスによるボーナス/ペナルティを計算する（v1.1）。
@@ -2013,8 +2014,15 @@ def calc_pace_bias_bonus(
 
     # ── 4. 開催段階・コース替わりバイアス（芝限定）──────────
     if race_surface == "芝":
-        is_opening = (race_week == 1) or course_change
-        is_worn    = (race_week >= 4)
+        # コース替わり優先：course_change=TrueのときはOPENING扱い・is_wornは無効
+        # 連続開催の場合はrace_week==1でも芝は回復していないため開幕週扱いしない
+        is_opening = ((race_week == 1 and not continuous_meet) or course_change)
+        is_worn    = (
+            not course_change and (           # コース替わりの場合は馬場荒れなし
+                continuous_meet               # 連続開催→週数に関係なく荒れ馬場
+                or race_week >= 3             # 通常開催→3週目以降（v1.2：4→3に変更）
+            )
+        )
 
         if is_opening:
             if is_front:
@@ -2024,8 +2032,11 @@ def calc_pace_bias_bonus(
                 # 差し・追込は不利方向ではないが開幕週情報をメモに記録
                 notes.append(f"開幕週({race_week}週目)")
         if is_worn:
-            # 4週目以降は脚質に関係なくメモに記録（差追有利・逃げ不利の根拠）
-            week_note = f"{race_week}週目(馬場荒れ)"
+            # 馬場荒れ状態：脚質に関係なくメモに記録（差追有利・逃げ不利の根拠）
+            if continuous_meet and race_week <= 2:
+                week_note = f"連続開催{race_week}週目(馬場荒れ)"
+            else:
+                week_note = f"{race_week}週目(馬場荒れ)"
             if is_behind:
                 bonus += V["small"]
                 notes.append(f"{week_note}差追:有利")

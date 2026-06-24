@@ -365,10 +365,14 @@ if st.session_state.phase2_results:
         # 1・2日目→1週目、3・4日目→2週目、…（ceil(nichime/2)）
         import math as _math
         _race_week = _math.ceil(nichime / 2)  # 1-2日目→1週目、3-4日目→2週目…
-        with st.expander("📅 展開設定（コース替わり）", expanded=False):
+        with st.expander("📅 展開設定（コース替わり・連続開催）", expanded=False):
             st.caption(f"開催週：{_race_week}週目（{nichime}日目より自動計算）")
-            _course_chg = st.checkbox("コース替わり初週", value=False, key="pace_course_change")
-            st.caption("開幕週・コース替わりは逃げ先行有利、4週目以降は差し追込有利の補正が入ります")
+            _chg_cols = st.columns(2)
+            _course_chg      = _chg_cols[0].checkbox("コース替わり初週", value=False, key="pace_course_change",
+                                                      help="コース変更で芝回復→逃先有利。ONの場合は連続開催より優先。")
+            _continuous_meet = _chg_cols[1].checkbox("連続開催", value=False, key="pace_continuous_meet",
+                                                      help="前開催から継続使用の芝コース→週数に関係なく馬場荒れ扱い")
+            st.caption("開幕週・コース替わり→逃先有利 / 連続開催または3週目以降→差追有利（コース替わり優先）")
 
         _adjusted = []
         import copy as _cp2
@@ -382,6 +386,7 @@ if st.session_state.phase2_results:
                 ri.venue or "", ri.surface or "", ri.distance or 0,
                 ri.direction or "", ri.track_cond or "",
                 int(_race_week), bool(_course_chg),
+                bool(st.session_state.get("pace_continuous_meet", False)),
             )
             if _pb != 0.0:
                 _nr = _cp2.copy(r)
