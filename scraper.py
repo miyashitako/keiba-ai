@@ -258,7 +258,18 @@ def fetch_race_info(race_url: str) -> RaceInfo:
     combined_text = info.race_name + info.race_class
     for kw in AGE_LIMITED_KEYWORDS:
         if kw in combined_text:
-            info.is_age_limited = True
+            # 「3歳以上」「2歳以上」は混合戦なので馬齢限定ではない
+            if kw in ("2歳", "3歳"):
+                # kw直後に「以上」が続く場合は除外
+                idx = combined_text.find(kw)
+                while idx != -1:
+                    after = combined_text[idx + len(kw):idx + len(kw) + 2]
+                    if after != "以上":
+                        info.is_age_limited = True
+                        break
+                    idx = combined_text.find(kw, idx + 1)
+            else:
+                info.is_age_limited = True
             break
 
     # 牝馬限定戦の判定（v1.1追加）
