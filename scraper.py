@@ -547,11 +547,12 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             except Exception:
                 pr.weight_carried = 55.0
 
-            # 距離・芝ダ（例: 芝1600 / ダ1700）
+            # 距離・芝ダ（例: 芝1600 / ダ1700 / 障2750）
             course_str = get(14)
-            m = re.search(r"([芝ダ])(\d+)", course_str)
+            m = re.search(r"([芝ダ障])(\d+)", course_str)
             if m:
-                pr.surface  = m.group(1)
+                surf = m.group(1)
+                pr.surface  = "障" if surf == "障" else surf
                 pr.distance = int(m.group(2))
 
             # 競馬場（開催欄から抽出）・is_local判定（v0.9追加）
