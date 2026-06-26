@@ -219,12 +219,28 @@ def fetch_race_info(race_url: str) -> RaceInfo:
         # 全角→半角に正規化してからマッチする
         import unicodedata
         text02_norm = unicodedata.normalize("NFKC", text02)
-        for cls in ["G1", "G2", "G3", "Jpn1", "Jpn2", "Jpn3",
-                    "OP", "オープン", "3勝クラス",
-                    "2勝クラス", "1勝クラス", "未勝利", "新馬"]:
-            if cls in text02_norm:
-                info.race_class = cls
-                break
+        # 障害クラスは平地より先に判定（"未勝利"が混在するため）
+        hurdle_cls = None
+        if "障" in text02_norm:
+            if "JGI" in text02_norm and "JGII" not in text02_norm and "JGIII" not in text02_norm:
+                hurdle_cls = "障害J・G1"
+            elif "JGII" in text02_norm and "JGIII" not in text02_norm:
+                hurdle_cls = "障害J・G2"
+            elif "JGIII" in text02_norm:
+                hurdle_cls = "障害J・G3"
+            elif "未勝利" in text02_norm:
+                hurdle_cls = "障害未勝利"
+            else:
+                hurdle_cls = "障害OP"
+        if hurdle_cls:
+            info.race_class = hurdle_cls
+        else:
+            for cls in ["G1", "G2", "G3", "Jpn1", "Jpn2", "Jpn3",
+                        "OP", "オープン", "3勝クラス",
+                        "2勝クラス", "1勝クラス", "未勝利", "新馬"]:
+                if cls in text02_norm:
+                    info.race_class = cls
+                    break
 
     # ── title タグから競馬場・日付を取得
     title_el = soup.find("title")

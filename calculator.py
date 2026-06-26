@@ -947,12 +947,13 @@ def get_class_base(race_class: str) -> float:
             return CLASS_BASE["G3"]
     # クラス名から推定
     # 障害クラスは平地クラスより先に判定（"未勝利"が混在するため）
-    if "障" in rc_norm:
-        if "J・G1" in rc_norm or "JG1" in rc_norm:
+    # netkeibaの過去走表記：「阪神スプリングJ(JGII)」のようにJGI/JGII/JGIII形式
+    if "障" in rc_norm or "JGI" in rc_norm or "JGII" in rc_norm or "JGIII" in rc_norm:
+        if "J・G1" in rc_norm or ("JGI" in rc_norm and "JGII" not in rc_norm and "JGIII" not in rc_norm):
             return CLASS_BASE["J・G1"]
-        if "J・G2" in rc_norm or "JG2" in rc_norm:
+        if "J・G2" in rc_norm or ("JGII" in rc_norm and "JGIII" not in rc_norm):
             return CLASS_BASE["J・G2"]
-        if "J・G3" in rc_norm or "JG3" in rc_norm:
+        if "J・G3" in rc_norm or "JGIII" in rc_norm:
             return CLASS_BASE["J・G3"]
         if "未勝利" in rc_norm:
             return CLASS_BASE["障害未勝利"]
