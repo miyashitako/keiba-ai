@@ -1965,10 +1965,18 @@ def calc_pace_bias_bonus(
     behind_count = sum(1 for _, s in all_styles if s in RUNNING_STYLE_BEHIND)
     half = field_size / 2
 
-    if front_count >= half and is_behind:
+    # 展開バイアスの方向を記録（矛盾判定用）
+    # pace_bias: "diff_adv"=差追有利, "front_adv"=逃先有利, None=バイアスなし
+    pace_bias = None
+    if front_count >= half:
+        pace_bias = "diff_adv"    # ハイペース→差追有利
+    elif behind_count >= half:
+        pace_bias = "front_adv"   # スロー→逃先有利
+
+    if pace_bias == "diff_adv" and is_behind:
         bonus += V["medium"]
         notes.append(f"前有利展開({front_count}頭):差追有利")
-    elif behind_count >= half and is_front:
+    elif pace_bias == "front_adv" and is_front:
         bonus += V["medium"]
         notes.append(f"後有利展開({behind_count}頭):逃先有利")
 
@@ -2053,28 +2061,51 @@ def calc_pace_bias_bonus(
             )
         )
 
+        # ── 矛盾検知：展開バイアス(1)と開催段階バイアス(4)が相反する場合 ──
+        # 開幕週(逃先有利) × ハイペース(差追有利) → 矛盾
+        # 3週目以降(差追有利) × スロー(逃先有利) → 矛盾
+        # 矛盾時は両方のボーナスをゼロ（相殺）しメモで警告
+        stage_bias = None
         if is_opening:
-            if is_front:
-                bonus += V["medium"]
-                notes.append("開幕週/コース替逃先:有利")
-            else:
-                # 差し・追込は不利方向ではないが開幕週情報をメモに記録
-                notes.append(f"開幕週({race_week}週目)")
-        if is_worn:
-            # 馬場荒れ状態：脚質に関係なくメモに記録（差追有利・逃げ不利の根拠）
-            if continuous_meet and race_week <= 2:
-                week_note = f"連続開催{race_week}週目(馬場荒れ)"
-            else:
-                week_note = f"{race_week}週目(馬場荒れ)"
-            if is_behind:
-                bonus += V["small"]
-                notes.append(f"{week_note}差追:有利")
-            elif is_nige:
-                bonus -= V["small"]
-                notes.append(f"{week_note}逃げ:不利")
-            else:
-                # 先行・その他：数値補正なしだがメモに週数を記録
-                notes.append(week_note)
+            stage_bias = "front_adv"   # 開幕週→逃先有利
+        elif is_worn:
+            stage_bias = "diff_adv"    # 馬場荒れ→差追有利
+
+        is_contradicted = (
+            (pace_bias == "diff_adv" and stage_bias == "front_adv") or
+            (pace_bias == "front_adv" and stage_bias == "diff_adv")
+        )
+
+        if is_contradicted:
+            # 展開(1)で加算済みのボーナスを相殺
+            if pace_bias == "diff_adv" and is_behind:
+                bonus -= V["medium"]
+            elif pace_bias == "front_adv" and is_front:
+                bonus -= V["medium"]
+            notes.append("⚠️展開矛盾(要判断)")
+        else:
+            if is_opening:
+                if is_front:
+                    bonus += V["medium"]
+                    notes.append("開幕週/コース替逃先:有利")
+                else:
+                    # 差し・追込は不利方向ではないが開幕週情報をメモに記録
+                    notes.append(f"開幕週({race_week}週目)")
+            if is_worn:
+                # 馬場荒れ状態：脚質に関係なくメモに記録（差追有利・逃げ不利の根拠）
+                if continuous_meet and race_week <= 2:
+                    week_note = f"連続開催{race_week}週目(馬場荒れ)"
+                else:
+                    week_note = f"{race_week}週目(馬場荒れ)"
+                if is_behind:
+                    bonus += V["small"]
+                    notes.append(f"{week_note}差追:有利")
+                elif is_nige:
+                    bonus -= V["small"]
+                    notes.append(f"{week_note}逃げ:不利")
+                else:
+                    # 先行・その他：数値補正なしだがメモに週数を記録
+                    notes.append(week_note)
 
     label = "/".join(notes) if notes else ""
     return (round(bonus, 3), label)
