@@ -410,6 +410,81 @@ if st.session_state.phase2_results:
 
     ranking = build_ranking_phase2(display_base) if use_phase2 else build_ranking(display_base)
 
+    # ── 上り馬注目フラグ（フェーズB：クラシック・ステップレース限定）──────
+    # 対象レース：菊花賞・秋華賞およびそのステップレース
+    CLASSIC_WATCH_RACES = {
+        "菊花賞", "セントライト記念", "神戸新聞杯",
+        "秋華賞", "ローズS", "紫苑S",
+    }
+    from calculator import get_class_base, calc_grade_bonus
+
+    _watch_flags = {}   # {horse_number: "⚡2勝上り注目" or "⚡3勝上り注目"}
+    _ri = st.session_state.race_info
+    _race_name_norm = ""
+    if _ri and _ri.race_name:
+        import unicodedata as _ud2
+        _race_name_norm = _ud2.normalize("NFKC", _ri.race_name)
+
+    _is_watch_race = any(name in _race_name_norm for name in CLASSIC_WATCH_RACES)
+
+    if _is_watch_race:
+        # 各馬の直前走クラスを判定（芝ダフィルター前の全走を使用）
+        _TWO_WIN_BASE  = 88.0   # 2勝クラス（1000万下含む）
+        _THREE_WIN_BASE = 84.0  # 3勝クラス（1600万下含む）
+
+        _two_win_candidates   = []   # [(score, horse_number), ...]
+        _three_win_candidates = []   # [(score, horse_number), ...]
+
+        for _h in st.session_state.horses:
+            # 直前走を芝ダフィルター前の全走から取得
+            _all_pr = _h.past_races   # scraper取得の全走（フィルター前）
+            if not _all_pr:
+                continue
+            _last = _all_pr[0]   # 直前走（インデックス0=最新）
+
+            # 直前走が着外（finish<=0）や取消の場合はスキップ
+            if _last.finish <= 0:
+                continue
+
+            _last_base = get_class_base(_last.race_class)
+
+            # 直前走が2勝クラス勝ち（finish==1 かつ CLASS_BASE==88.0）
+            if _last.finish == 1 and _last_base == _TWO_WIN_BASE:
+                _score = next(
+                    (r.phase2_score if use_phase2 else r.phase1_score
+                     for r in ranking if r.horse_number == _h.number),
+                    9999.0
+                )
+                _two_win_candidates.append((_score, _h.number))
+
+            # 直前走が3勝クラス勝ち（finish==1 かつ CLASS_BASE==84.0）かつ重賞実績なし
+            elif _last.finish == 1 and _last_base == _THREE_WIN_BASE:
+                _grade_b = calc_grade_bonus(_all_pr, age_limited=False)
+                if _grade_b == 0.0:   # 重賞実績なし（格ボーナスゼロ）
+                    _score = next(
+                        (r.phase2_score if use_phase2 else r.phase1_score
+                         for r in ranking if r.horse_number == _h.number),
+                        9999.0
+                    )
+                    _three_win_candidates.append((_score, _h.number))
+
+        # スコア最良（最小値）の1頭だけフラグ付与
+        if _two_win_candidates:
+            _best_two = min(_two_win_candidates, key=lambda x: x[0])
+            _watch_flags[_best_two[1]] = "⚡2勝上り注目"
+        if _three_win_candidates:
+            _best_three = min(_three_win_candidates, key=lambda x: x[0])
+            _watch_flags[_best_three[1]] = "⚡3勝上り注目"
+
+        if _watch_flags:
+            _flag_labels = "　".join(
+                f"**{_watch_flags[hn]}** (#{hn})"
+                for hn in sorted(_watch_flags.keys())
+            )
+            st.info(f"🔎 上り馬注目：{_flag_labels}")
+
+    # ────────────────────────────────────────────────────────────────────
+
     table_data = []
     for rank, r in enumerate(ranking, 1):
         if use_phase2:
@@ -425,6 +500,23 @@ if st.session_state.phase2_results:
 
         score_disp = f"{score:.3f}" if score < 9000 else "—"
 
+        # 上り馬フラグをメモに追記
+        _flag = _watch_flags.get(r.horse_number, "")
+        _note_with_flag = f"{_flag} {r.note}".strip() if _flag else r.note
+
+        # 斤量増減注意情報（前走比±2kg以上で表示）
+        _h_obj = next((h for h in st.session_state.horses if h.number == r.horse_number), None)
+        if _h_obj and _h_obj.past_races:
+            _prev_wc = _h_obj.past_races[0].weight_carried
+            _curr_wc = _h_obj.weight_carried
+            _wc_diff = _curr_wc - _prev_wc
+            if _wc_diff >= 4.0:
+                _note_with_flag = f"⚠️⚠️斤量+{_wc_diff:.1f}kg増 {_note_with_flag}".strip()
+            elif _wc_diff >= 2.0:
+                _note_with_flag = f"⚠️斤量+{_wc_diff:.1f}kg増 {_note_with_flag}".strip()
+            elif _wc_diff <= -2.0:
+                _note_with_flag = f"✅斤量{_wc_diff:.1f}kg減 {_note_with_flag}".strip()
+
         table_data.append({
             "予想順位":   rank,
             "馬番":       r.horse_number,
@@ -434,7 +526,7 @@ if st.session_state.phase2_results:
             "ベスト":     best,
             "標準偏差":   std,
             "走数":       r.valid_runs,
-            "メモ":       r.note,
+            "メモ":       _note_with_flag,
         })
 
     df = pd.DataFrame(table_data)
