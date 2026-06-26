@@ -226,22 +226,17 @@ if fetch_btn:
                 for h in horses if getattr(h, "_sex_parse_warning", None)
             ]
             # ── 障害レースデバッグパネル（race_class確認用）─────────────
-            is_hurdle_race = any(
-                "障" in (pr.race_class or "") 
-                for h in horses for pr in h.past_races[:3]
-            )
-            if is_hurdle_race:
-                with st.expander("🔍 デバッグ：障害過去走race_class確認", expanded=True):
-                    st.caption("障害レースのrace_classキーワード確認用。実装後は非表示にします。")
-                    for h in horses:
-                        if h.past_races:
-                            lines = [
-                                f"  {i+1}走前: race_class='{pr.race_class}' finish={pr.finish}"
-                                for i, pr in enumerate(h.past_races[:5])
-                            ]
-                            st.text(f"#{h.number} {h.name}")
-                            for line in lines:
-                                st.text(line)
+            with st.expander("🔍 デバッグ：過去走race_class確認（障害調査用）", expanded=False):
+                st.caption("障害レースのrace_classキーワード確認用。実装後は非表示にします。")
+                for h in horses:
+                    if h.past_races:
+                        lines = [
+                            f"  {i+1}走前: race_class='{pr.race_class}' finish={pr.finish}"
+                            for i, pr in enumerate(h.past_races[:5])
+                        ]
+                        st.text(f"#{h.number} {h.name}")
+                        for line in lines:
+                            st.text(line)
 
             with st.expander("🔍 デバッグ：性別・騎手取得状況（エラー調査用）", expanded=bool(warnings)):
                 st.caption("性別が空欄の馬がいる場合、土曜レース中のHTML構造変化が疑われます。")
