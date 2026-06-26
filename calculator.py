@@ -1219,15 +1219,19 @@ def calc_phase1(
     # ── 障害転向処理（v1.1追加）
     # 直近の連続した障害走のみを使い、その前の平地走は除外する
     # 障害走はタイム比較が無意味なため gap=0 で着順のみ評価
-    def _is_hurdle(rc: str) -> bool:
-        rc_n = rc.replace("　", " ").replace("　", " ")
+    def _is_hurdle(pr) -> bool:
+        # surface=="障" が最も確実（scraper修正後）
+        # race_classの文字列でもフォールバック判定
+        if getattr(pr, "surface", "") == "障":
+            return True
+        rc_n = pr.race_class.replace("　", " ").replace("　", " ")
         return "障" in rc_n or "障害" in rc_n or "hurdle" in rc_n.lower() or "steeplechase" in rc_n.lower()
 
-    if past_races and any(_is_hurdle(pr.race_class) for pr in past_races):
+    if past_races and any(_is_hurdle(pr) for pr in past_races):
         # 先頭から連続する障害走を取り出し、最初の平地走以降を除外
         hurdle_streak = []
         for pr in past_races:
-            if _is_hurdle(pr.race_class):
+            if _is_hurdle(pr):
                 hurdle_streak.append(pr)
             else:
                 break  # 平地走が出たら打ち切り
