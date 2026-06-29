@@ -1749,8 +1749,11 @@ def calc_phase4(results: list) -> Phase4Result:
     std_2_5 = statistics.stdev(s2_5) if len(s2_5) >= 2 else 0.0
     max_diff_2_5 = (max(s2_5) - min(s2_5)) if s2_5 else 0.0
 
-    # ── 1強判定（2位に対して0.3秒以上離れている）
-    result.is_dominant = result.gap_1_2 >= 0.30
+    # ── 1強判定（1位と2位の差が全体スコアレンジの20%以上）
+    # 絶対値(0.30)では混戦レースでも1強になりやすいため相対化
+    score_range = scores[-1] - scores[0] if len(scores) >= 2 else 0.0
+    relative_gap_1_2 = result.gap_1_2 / score_range if score_range > 0 else 0.0
+    result.is_dominant = relative_gap_1_2 >= 0.20
 
     # ── 判定ロジック
     if result.is_dominant:
@@ -1771,13 +1774,15 @@ def calc_phase4(results: list) -> Phase4Result:
     else:
         result.top3_horses = numbers[:3]
         result.rival_range = numbers[:4]
-        if result.gap_1_3 >= 0.30:
+        # gap_1_3も相対化して判定
+        relative_gap_1_3 = result.gap_1_3 / score_range if score_range > 0 else 0.0
+        if relative_gap_1_3 >= 0.30:
             result.judgment        = "明確型"
             result.recommended_bet = "上位3頭が分離、軸1頭流し"
-        elif result.gap_1_3 >= 0.15:
+        elif relative_gap_1_3 >= 0.15:
             result.judgment        = "準混戦"
             result.recommended_bet = "軸1頭流し（馬連）"
-        elif result.gap_1_3 >= 0.08:
+        elif relative_gap_1_3 >= 0.07:
             result.judgment        = "混戦"
             result.recommended_bet = "馬連BOX（上位3〜4頭）"
         else:
