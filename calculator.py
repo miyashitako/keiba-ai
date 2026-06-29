@@ -39,12 +39,12 @@ CLASS_BASE = {
     "Jpn2":       72.0,
     "G1":         68.0,
     "Jpn1":       68.0,
-    # 障害クラス
+    # 障害クラス（J・G1〜OPは同一BASE、差別化は格ボーナスで行う）
     "障害未勝利":  95.0,
     "障害OP":      80.0,
-    "J・G3":       76.0,
-    "J・G2":       72.0,
-    "J・G1":       68.0,
+    "J・G3":       80.0,
+    "J・G2":       80.0,
+    "J・G1":       80.0,
 }
 CLASS_BASE_DEFAULT = 92.0
 
@@ -61,6 +61,13 @@ GRADE_BONUS_TABLE = {
     "OP":       0.6,
     "オープン": 0.6,
     "L":        0.5,
+    # 障害重賞（CLASS_BASEは全て80.0統一、差別化は格ボーナスで行う）
+    "JGI":      3.0,
+    "JGII":     2.0,
+    "JGIII":    1.2,
+    "J・G1":    3.0,
+    "J・G2":    2.0,
+    "J・G3":    1.2,
 }
 GRADE_RANK_SCALE = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4}
 
@@ -370,8 +377,11 @@ def _normalize_grade(race_class: str) -> str:
     ローマ数字グレード表記をアラビア数字に統一する
     例: 'スプリングS(GII)' → 'スプリングS(G2)'
     順序重要: GIII→G3 を GII→G2 より先に処理
+    障害重賞(JGIII/JGII/JGI)はJ・G3/J・G2/J・G1に変換
     """
     rc = race_class
+    # 障害重賞を先に変換（GI/GII/GIIIより先に処理しないとJGI→JG1になってしまう）
+    rc = rc.replace("JGIII", "J・G3").replace("JGII", "J・G2").replace("JGI", "J・G1")
     rc = rc.replace("GIII", "G3").replace("GII", "G2").replace("GI", "G1")
     rc = rc.replace("JpnIII", "Jpn3").replace("JpnII", "Jpn2").replace("JpnI", "Jpn1")
     return rc
