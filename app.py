@@ -389,7 +389,12 @@ if st.session_state.phase2_results:
 
         _adjusted = []
         import copy as _cp2
+        # 障害レースは展開・競馬場バイアスをスキップ
+        _is_hurdle_race = "障" in (ri.race_class or "")
         for r in st.session_state.phase3_results:
+            if _is_hurdle_race:
+                _adjusted.append(r)
+                continue
             _h = next((h for h in st.session_state.horses if h.number == r.horse_number), None)
             _style = _styles.get(r.horse_number, "")
             _frame = _h.frame if _h else 0

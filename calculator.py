@@ -569,13 +569,16 @@ def calc_momentum_bonus(
     curr_order = _get_class_order(current_class)
 
     if curr_order > prev_order:          # 昇級
-        margin_sec = prev.margin         # 秒差
-        if margin_sec <= 0.1:
-            return  1.5   # 僅差昇級：ボーナス（スコアから引く）
-        elif margin_sec <= 0.3:
-            return  0.75
+        if prev.finish != 1:
+            # 前走で勝っていない昇級（特殊ケース）→ ペナルティ
+            return -0.5
+        # 前走1着：margin = 2着馬との差（リード）で勝ち方を判定
+        if prev.margin >= 0.5:
+            return  1.5   # 圧勝昇級 → ボーナス（スコアから引く）
+        elif prev.margin >= 0.2:
+            return  0.5   # 中間
         else:
-            return -0.75  # 大差負けで昇級：ペナルティ（スコアに加わる）
+            return -0.75  # 僅差勝ち昇級 → ペナルティ（スコアに加わる）
     # 格下げ・同クラスはペナルティなし
     return 0.0
 
@@ -1303,13 +1306,18 @@ def calc_phase1(
                 if pr.finish >= 6:  # 大敗の場合のみnoteに記録
                     penalty_notes.append(f"馬齢限定OP読替({pr.race_class[:8]}→{current_class})")
 
-        pt = calc_race_point(pr.finish, gap, pr_race_class_for_calc, pr.weight_carried, fs)
+        # 障害走はタイム差・着差が無意味（落馬・飛越ミス等のアクシデントが多い）
+        # → gap=0で渡して大差負けペナルティを無効化
+        _pr_is_hurdle = getattr(pr, "surface", "") == "障"
+        gap_for_calc = 0.0 if _pr_is_hurdle else gap
+
+        pt = calc_race_point(pr.finish, gap_for_calc, pr_race_class_for_calc, pr.weight_carried, fs)
         if pt is not None:
             race_points.append(pt)
             finish_list.append(pr.finish)
 
-            # 大差負けペナルティ検知（noteへ追記用）
-            if pr.finish >= 6 and gap > 1.0:
+            # 大差負けペナルティ検知（noteへ追記用）障害走はスキップ
+            if not _pr_is_hurdle and pr.finish >= 6 and gap > 1.0:
                 for threshold, pen in LARGE_MARGIN_PENALTY:
                     if gap > threshold:
                         penalty_notes.append(f"大差負け({gap:.1f}秒):+{pen:.1f}")
