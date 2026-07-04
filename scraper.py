@@ -601,8 +601,12 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             time_diff = time_to_sec(time_diff_str)
             if pr.finish == 1:
                 pr.winner_time_sec = pr.time_sec
-            elif time_diff > 0:
+            elif 0 < time_diff < 10.0:
                 # 列20がタイム差（秒）として取れた場合
+                # ※ 上限10秒：競馬の着差として10秒超はあり得ない。
+                #   列20がペースタイム等（"1:16.0"→76秒）を誤パースする場合があり、
+                #   その値をtime_diffとして使うと gap=76秒→大差負けペナルティが
+                #   誤発動するバグを防ぐ（v1.5修正）。
                 pr.winner_time_sec = round(pr.time_sec - time_diff, 3)
             elif pr.margin > 0 and pr.time_sec > 0:
                 # フォールバック：直前馬差×0.1秒を着順分累積（粗い推定）

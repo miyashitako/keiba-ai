@@ -1278,7 +1278,12 @@ def calc_phase1(
             is_age_limited_op = getattr(pr, "is_age_limited", False) and _detect_grade_key(pr.race_class) in ("L", "OP", "オープン", "")
             # 今回クラスと過去走クラスがともにオープン以上なら除外しない
             both_open = current_base < OP_BASE_THRESHOLD and pr_base < OP_BASE_THRESHOLD
-            is_overclass = (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_age_limited_op and not both_open
+            # 新馬走は格上挑戦除外の対象外（v1.5修正）
+            # CLASS_BASE["新馬"]=92.0 はスコアリング上の設計値であり、
+            # 未勝利(95.0)より小さいため「格上」と誤判定されるバグを防ぐ。
+            # 新馬戦は初戦であり、未勝利戦より格上というクラス序列は存在しない。
+            is_shinba = "新馬" in pr.race_class
+            is_overclass = (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_age_limited_op and not both_open and not is_shinba
             if is_overclass:
                 overclass_excluded += 1
             else:
