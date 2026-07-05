@@ -1197,20 +1197,27 @@ def calc_phase1(
 
     _all_for_interval = list(past_races)   # 地方除外前・全走（出走間隔計算用）
 
-    # ── 地方走除外（v0.9 / v1.2バグ修正・順序修正）
+    # ── 地方走除外（v0.9 / v1.2バグ修正・順序修正 / v1.5①修正）
     # ※ 芝ダフィルターより先に地方除外を行う。
     #   先に芝ダフィルターをかけると「地方ダート走のみ」が残り、
     #   地方除外後に有効走ゼロになるケースを防ぐ。
-    # 修正前：central_racesが空の場合（全走が地方）はそのまま使っていた
-    # 修正後：中央走が1走でもあれば地方走を除外。全走地方の場合も除外してnoteに記録。
-    central_races = [pr for pr in past_races if not pr.is_local]
-    local_excluded = len(past_races) - len(central_races)
+    # v1.5①修正：is_local=Trueでも Jpn1/Jpn2/Jpn3 は中央扱い（交流重賞）。
+    #   旧ロジックはvenue（開催場）のみで判定しており、
+    #   大井・川崎等で開催される交流G1（JBCクラシック等）が全除外されていた。
+    import re as _re_local
+    def _is_jpn_grade(race_class: str) -> bool:
+        return bool(_re_local.search(r'Jpn[123]', race_class))
+
+    central_races = [pr for pr in past_races if not pr.is_local or _is_jpn_grade(pr.race_class)]
+    local_races   = [pr for pr in past_races if pr.is_local and not _is_jpn_grade(pr.race_class)]
+    local_excluded = len(local_races)
     if local_excluded > 0:
         if central_races:
             past_races = central_races
             result.note = (result.note + f" [地方走除外{local_excluded}走]").strip()
         else:
             # 全走が地方の場合：除外してnoteに記録（有効走数0として扱う）
+            # ※ valid_runs==0の後段で地方実績フォールバック（②）を試みる
             past_races = []
             result.note = (result.note + f" [地方走のみ({local_excluded}走)→除外]").strip()
 
@@ -1278,12 +1285,7 @@ def calc_phase1(
             is_age_limited_op = getattr(pr, "is_age_limited", False) and _detect_grade_key(pr.race_class) in ("L", "OP", "オープン", "")
             # 今回クラスと過去走クラスがともにオープン以上なら除外しない
             both_open = current_base < OP_BASE_THRESHOLD and pr_base < OP_BASE_THRESHOLD
-            # 新馬走は格上挑戦除外の対象外（v1.5修正）
-            # CLASS_BASE["新馬"]=92.0 はスコアリング上の設計値であり、
-            # 未勝利(95.0)より小さいため「格上」と誤判定されるバグを防ぐ。
-            # 新馬戦は初戦であり、未勝利戦より格上というクラス序列は存在しない。
-            is_shinba = "新馬" in pr.race_class
-            is_overclass = (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_age_limited_op and not both_open and not is_shinba
+            is_overclass = (current_base - pr_base) >= 2.0 and pr.finish >= 6 and not is_age_limited_op and not both_open
             if is_overclass:
                 overclass_excluded += 1
             else:
@@ -1354,9 +1356,68 @@ def calc_phase1(
         result.note = (result.note + " [" + "/".join(penalty_notes) + "]").strip()
 
     if result.valid_runs == 0:
-        result.note = (result.note + " 有効な走行データなし").strip()
-        result.phase1_score = 9999.0
-        return result
+        # ── ② 地方実績フォールバック（v1.5追加）
+        # 中央有効走ゼロの場合に限り、除外した地方走の勝ち星から
+        # 換算クラスを推定してability_avgを設定する。
+        # 地域差（南関東 vs 他地区）は考慮せず一律換算（仮設定・要検証）。
+        # 換算テーブル（上から順に評価し、最初に条件を満たした行を採用）：
+        #   地方OP/重賞1勝 → OP相当    (80.0)
+        #   地方Aクラス2勝 → 3勝クラス相当 (84.0)
+        #   地方Aクラス1勝 → 2勝クラス相当 (88.0)
+        #   地方Bクラス2勝 → 2勝クラス相当 (88.0)
+        #   地方Bクラス1勝 → 1勝クラス相当 (92.0)
+        #   地方Cクラス2勝 → 1勝クラス相当 (92.0)
+        #   地方Cクラス1勝 → 未勝利相当     (95.0)
+        _fallback_applied = False
+        if local_races:
+            import re as _re_lf
+            # 地方走を勝ち星でクラス分類
+            _lw = {"OP": 0, "A": 0, "B": 0, "C": 0}
+            for _lpr in local_races:
+                if _lpr.finish != 1:
+                    continue
+                _rc = _lpr.race_class
+                if _re_lf.search(r'OP|オープン|重賞|Jpn', _rc, _re_lf.IGNORECASE):
+                    _lw["OP"] += 1
+                elif _re_lf.search(r'\bA[1-3]?\b|A級', _rc, _re_lf.IGNORECASE):
+                    _lw["A"] += 1
+                elif _re_lf.search(r'\bB[1-3]?\b|B級', _rc, _re_lf.IGNORECASE):
+                    _lw["B"] += 1
+                elif _re_lf.search(r'\bC[1-2]?\b|C級', _rc, _re_lf.IGNORECASE):
+                    _lw["C"] += 1
+
+            # 換算テーブル（優先順：OP→A→B→C、勝利数多い方優先）
+            _LOCAL_EQUIV = [
+                ("OP", 1, "OP",        80.0),
+                ("A",  2, "3勝クラス", 84.0),
+                ("A",  1, "2勝クラス", 88.0),
+                ("B",  2, "2勝クラス", 88.0),
+                ("B",  1, "1勝クラス", 92.0),
+                ("C",  2, "1勝クラス", 92.0),
+                ("C",  1, "未勝利",    95.0),
+            ]
+            for _cls, _min_w, _equiv_name, _equiv_base in _LOCAL_EQUIV:
+                if _lw[_cls] >= _min_w:
+                    # 勝ち星があるので winner bonus として -1.0pt
+                    _pseudo_avg = round(_equiv_base - 1.0, 3)
+                    result.ability_avg  = _pseudo_avg
+                    result.best_time    = _pseudo_avg
+                    result.phase1_score = _pseudo_avg
+                    result.valid_runs   = 1   # 疑似1走扱い
+                    _wins_str = "/".join(
+                        f"{k}{v}勝" for k, v in _lw.items() if v > 0
+                    )
+                    result.note = (
+                        result.note
+                        + f" [地方実績換算:{_wins_str}→{_equiv_name}相当]"
+                    ).strip()
+                    _fallback_applied = True
+                    break
+
+        if not _fallback_applied:
+            result.note = (result.note + " 有効な走行データなし").strip()
+            result.phase1_score = 9999.0
+            return result
 
     weights = WEIGHT_RECENT[: result.valid_runs]
     total_w = sum(weights)
