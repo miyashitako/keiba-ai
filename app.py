@@ -34,7 +34,7 @@ st.set_page_config(
 #   フィールド平均より重い → スコア増（不利）
 # 現在は案B（全レース一律適用）で検証中。
 # 将来的にハンデ戦判定が安定したら案A（ハンデ戦のみ）に切り替え可能。
-WEIGHT_FIELD_RATE = 0.3  # pt/kg（検証用初期値）
+WEIGHT_FIELD_RATE = 0.5  # pt/kg（v1.5検証：北九州記念で0.3では不足→0.5に変更）
 
 st.title("🐎 競馬AI予想システム")
 st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応")
