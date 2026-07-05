@@ -41,6 +41,7 @@ class RaceInfo:
     is_age_limited: bool = False    # 馬齢限定戦フラグ（v1.0追加）
     is_classic_distance: bool = False  # 秋華賞・菊花賞等の長距離フラグ（v1.0追加）
     is_female_only: bool = False    # 牝馬限定戦フラグ（v1.1追加）
+    weight_type: str = ""           # "ハンデ" / "別定" / "定量" / "" （v1.5追加）
 
 
 @dataclass
@@ -145,6 +146,47 @@ def extract_race_id(url: str) -> Optional[str]:
 def extract_horse_id(href: str) -> Optional[str]:
     m = re.search(r"/horse/(\d+)", href)
     return m.group(1) if m else None
+
+
+# ──────────────────────────────────────────────
+# ハンデ重賞の既知リスト（v1.5追加）
+# RaceData02の「ハンデ」テキスト検出が難しい重賞をリスト化。
+# RaceData02またはrace_nameで検出できた場合は上書きされるため、
+# このリストは「検出できなかった場合の保険」として機能する。
+# ※ 別定・定量重賞はこのリストに含めない（重要なのはハンデ戦のみ）
+# ──────────────────────────────────────────────
+KNOWN_HANDICAP_RACES: set[str] = {
+    # G2
+    "目黒記念",
+    "函館記念",
+    "小倉記念",
+    "新潟記念",
+    "アルゼンチン共和国杯",
+    # G3
+    "中山金杯",
+    "京都金杯",
+    "小倉大賞典",
+    "中日新聞杯",
+    "福島記念",
+    "ターコイズS",
+    "ターコイズステークス",
+    "CBC賞",
+    "北九州記念",
+    "巴賞",
+    "カシオペアS",
+    "カシオペアステークス",
+    "ディセンバーS",
+    "ディセンバーステークス",
+    "ニューイヤーS",
+    "ニューイヤーステークス",
+    "東京ハイジャンプ",        # 障害G2
+    "中山グランドジャンプ",    # 障害G1（ハンデ）
+    "阪神スプリングジャンプ",  # 障害G2
+    "小倉サマージャンプ",      # 障害G3
+    "新潟ジャンプS",
+    "中山ジャンプS",
+    "福島ジャンプS",
+}
 
 
 # ──────────────────────────────────────────────
@@ -315,6 +357,27 @@ def fetch_race_info(race_url: str) -> RaceInfo:
         if name in info.race_name:
             info.is_classic_distance = True
             break
+
+    # ── 斤量方式の判定（v1.5追加）
+    # 優先順位：①RaceData02テキスト → ②race_nameのキーワード → ③既知ハンデ重賞リスト
+    # 判定できなかった場合は "" のまま（不明扱い）
+    _wt_text = ""
+    if data02:
+        _wt_text = unicodedata.normalize("NFKC", data02.get_text(strip=True))
+    _wt_combined = _wt_text + info.race_name
+
+    if "ハンデ" in _wt_combined or "ハンデキャップ" in _wt_combined:
+        info.weight_type = "ハンデ"
+    elif "別定" in _wt_combined:
+        info.weight_type = "別定"
+    elif "定量" in _wt_combined or "馬齢重量" in _wt_combined:
+        info.weight_type = "定量"
+    else:
+        # 既知ハンデ重賞リストで保険判定
+        for known in KNOWN_HANDICAP_RACES:
+            if known in info.race_name:
+                info.weight_type = "ハンデ"
+                break
 
     return info
 
@@ -601,12 +664,8 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             time_diff = time_to_sec(time_diff_str)
             if pr.finish == 1:
                 pr.winner_time_sec = pr.time_sec
-            elif 0 < time_diff < 10.0:
+            elif time_diff > 0:
                 # 列20がタイム差（秒）として取れた場合
-                # ※ 上限10秒：競馬の着差として10秒超はあり得ない。
-                #   列20がペースタイム等（"1:16.0"→76秒）を誤パースする場合があり、
-                #   その値をtime_diffとして使うと gap=76秒→大差負けペナルティが
-                #   誤発動するバグを防ぐ（v1.5修正）。
                 pr.winner_time_sec = round(pr.time_sec - time_diff, 3)
             elif pr.margin > 0 and pr.time_sec > 0:
                 # フォールバック：直前馬差×0.1秒を着順分累積（粗い推定）
