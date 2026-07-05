@@ -28,14 +28,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── フィールド相対斤量補正レート（v1.5追加）
-# 1kg = このpt数だけスコアを増減。小さいほど良スコアなので
-#   フィールド平均より軽い → スコア減（有利）
-#   フィールド平均より重い → スコア増（不利）
-# 現在は案B（全レース一律適用）で検証中。
-# 将来的にハンデ戦判定が安定したら案A（ハンデ戦のみ）に切り替え可能。
-WEIGHT_FIELD_RATE = 0.3  # pt/kg（検証用初期値）
-
 st.title("🐎 競馬AI予想システム")
 st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応")
 
@@ -427,41 +419,6 @@ if st.session_state.phase2_results:
         _pace_base = sorted(_adjusted, key=lambda x: x.phase2_score if use_phase2 else x.phase1_score)
     else:
         _pace_base = st.session_state.phase3_results or []
-
-    # ── フィールド相対斤量補正（v1.5追加）─────────────────────────────
-    # 今回レースの全馬斤量平均を基準に、軽い馬を有利・重い馬を不利に補正。
-    # 案B（全レース一律）で検証中。
-    # race_info.weight_type == "ハンデ" 判定が安定したら
-    #   「if not ri or ri.weight_type == "ハンデ":」に切り替えて案Aへ移行可能。
-    _horses_for_weight = st.session_state.horses
-    _weights = [h.weight_carried for h in _horses_for_weight if h.weight_carried > 0]
-    if len(_weights) >= 2:
-        import statistics as _stats
-        _field_avg_w = _stats.mean(_weights)
-        _wt_adjusted = []
-        import copy as _cp3
-        for r in _pace_base:
-            _h_w = next((h.weight_carried for h in _horses_for_weight if h.number == r.horse_number), 0)
-            if _h_w <= 0:
-                _wt_adjusted.append(r)
-                continue
-            _wt_diff = _field_avg_w - _h_w   # 正=平均より軽い=有利
-            _wt_adj  = round(_wt_diff * WEIGHT_FIELD_RATE, 3)
-            if abs(_wt_adj) >= 0.05:          # 0.05pt未満は表示しない
-                _nr_w = _cp3.copy(r)
-                if use_phase2:
-                    _nr_w.phase2_score = round(_nr_w.phase2_score - _wt_adj, 3)
-                else:
-                    _nr_w.phase1_score = round(_nr_w.phase1_score - _wt_adj, 3)
-                _sign = "-" if _wt_adj > 0 else "+"
-                _ri_wt = ri.weight_type if ri else ""
-                _wt_label = f"ハンデ" if _ri_wt == "ハンデ" else "斤量"
-                _nr_w.note = (_nr_w.note + f" [{_wt_label}:{_sign}{abs(_wt_adj):.2f}pt({_h_w}kg/avg{_field_avg_w:.1f}kg)]").strip()
-                _wt_adjusted.append(_nr_w)
-            else:
-                _wt_adjusted.append(r)
-        _pace_base = sorted(_wt_adjusted, key=lambda x: x.phase2_score if use_phase2 else x.phase1_score)
-    # ─────────────────────────────────────────────────────────────────
 
     # 表示用ranking：Phase5適用済みならphase2_resultsを、未適用ならphase3_resultsを使う
     if st.session_state.phase5_applied:
