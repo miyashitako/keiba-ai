@@ -1372,8 +1372,12 @@ def calc_phase1(
         if local_races:
             import re as _re_lf
             # 地方走を勝ち星でクラス分類
-            _lw = {"OP": 0, "A": 0, "B": 0, "C": 0}
+            _lw = {"OP": 0, "A": 0, "B": 0, "C": 0, "不明": 0}
+            _local_rc_debug = []   # デバッグ用：地方走のrace_classを記録
             for _lpr in local_races:
+                _local_rc_debug.append(
+                    f"{_lpr.date}:{_lpr.race_class}({'1着' if _lpr.finish == 1 else f'{_lpr.finish}着'})"
+                )
                 if _lpr.finish != 1:
                     continue
                 _rc = _lpr.race_class
@@ -1385,16 +1389,24 @@ def calc_phase1(
                     _lw["B"] += 1
                 elif _re_lf.search(r'\bC[1-2]?\b|C級', _rc, _re_lf.IGNORECASE):
                     _lw["C"] += 1
+                else:
+                    # クラス表記が不明だが勝ち星はある（C1相当として保守的に扱う）
+                    _lw["不明"] += 1
 
-            # 換算テーブル（優先順：OP→A→B→C、勝利数多い方優先）
+            # result に地方走race_classリストを付加（デバッグパネル用）
+            result._local_rc_debug = _local_rc_debug  # type: ignore[attr-defined]
+
+            # 換算テーブル（優先順：OP→A→B→C→不明）
+            # 「不明」は地方勝ち星はあるがクラス表記が認識できなかったケース → C1相当で保守的に扱う
             _LOCAL_EQUIV = [
-                ("OP", 1, "OP",        80.0),
-                ("A",  2, "3勝クラス", 84.0),
-                ("A",  1, "2勝クラス", 88.0),
-                ("B",  2, "2勝クラス", 88.0),
-                ("B",  1, "1勝クラス", 92.0),
-                ("C",  2, "1勝クラス", 92.0),
-                ("C",  1, "未勝利",    95.0),
+                ("OP",  1, "OP",        80.0),
+                ("A",   2, "3勝クラス", 84.0),
+                ("A",   1, "2勝クラス", 88.0),
+                ("B",   2, "2勝クラス", 88.0),
+                ("B",   1, "1勝クラス", 92.0),
+                ("C",   2, "1勝クラス", 92.0),
+                ("C",   1, "未勝利",    95.0),
+                ("不明",1, "未勝利(クラス不明)", 95.0),
             ]
             for _cls, _min_w, _equiv_name, _equiv_base in _LOCAL_EQUIV:
                 if _lw[_cls] >= _min_w:

@@ -246,6 +246,20 @@ if fetch_btn:
                         for line in lines:
                             st.text(line)
 
+            # ── 地方走race_classデバッグパネル（地方転入馬の換算確認用）──
+            _local_debug_lines = []
+            for _r in st.session_state.phase1_results:
+                _debug = getattr(_r, "_local_rc_debug", None)
+                if _debug:
+                    _local_debug_lines.append(f"#{_r.horse_number} {_r.horse_name}")
+                    for _d in _debug:
+                        _local_debug_lines.append(f"  {_d}")
+            if _local_debug_lines:
+                with st.expander("🔍 デバッグ：地方走race_class確認（転入馬換算調査用）", expanded=False):
+                    st.caption("地方走のみの馬のrace_class一覧。クラス判定が「不明」になっている場合は正規表現の拡張が必要です。")
+                    for _line in _local_debug_lines:
+                        st.text(_line)
+
             with st.expander("🔍 デバッグ：性別・騎手取得状況（エラー調査用）", expanded=bool(warnings)):
                 st.caption("性別が空欄の馬がいる場合、土曜レース中のHTML構造変化が疑われます。")
                 if warnings:
