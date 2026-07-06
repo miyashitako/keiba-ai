@@ -1400,9 +1400,8 @@ def calc_phase1(
                 if _lw[_cls] >= _min_w:
                     # 勝ち星があるので winner bonus として -1.0pt
                     _pseudo_avg = round(_equiv_base - 1.0, 3)
-                    result.ability_avg  = _pseudo_avg
-                    result.best_time    = _pseudo_avg
-                    result.phase1_score = _pseudo_avg
+                    # race_points に疑似値をセットして後続の min()/ability_avg 計算を通す
+                    race_points = [_pseudo_avg]
                     result.valid_runs   = 1   # 疑似1走扱い
                     _wins_str = "/".join(
                         f"{k}{v}勝" for k, v in _lw.items() if v > 0
