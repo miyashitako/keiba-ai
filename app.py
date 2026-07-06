@@ -442,14 +442,12 @@ if st.session_state.phase2_results:
     else:
         _pace_base = st.session_state.phase3_results or []
 
-    # ── フィールド相対斤量補正（v1.5追加）─────────────────────────────
-    # 今回レースの全馬斤量平均を基準に、軽い馬を有利・重い馬を不利に補正。
-    # 案B（全レース一律）で検証中。
-    # race_info.weight_type == "ハンデ" 判定が安定したら
-    #   「if not ri or ri.weight_type == "ハンデ":」に切り替えて案Aへ移行可能。
+    # ── フィールド相対斤量補正（v1.5 / 案A：ハンデ戦のみ適用）─────────────
+    # ハンデ戦のみ適用。race_info.weight_type が "ハンデ" と判定された場合のみ実行。
+    # 案Bの全レース一律適用は北九州記念1件で検証後、案Aへ切り替え（v1.5）。
     _horses_for_weight = st.session_state.horses
     _weights = [h.weight_carried for h in _horses_for_weight if h.weight_carried > 0]
-    if len(_weights) >= 2:
+    if ri and ri.weight_type == "ハンデ" and len(_weights) >= 2:
         import statistics as _stats
         _field_avg_w = _stats.mean(_weights)
         _wt_adjusted = []
