@@ -1385,13 +1385,21 @@ def calc_phase1(
                 )
                 _rc = _lpr.race_class
                 # クラス判定（勝敗問わず・競走クラスベース用）
+                # v1.5②修正：\b（単語境界）は漢字等のUnicode文字も
+                # 「単語文字」とみなすため、"サラ系C3"や"C2三　四"のように
+                # クラス表記へ直接漢字がくっつく実データで検出漏れが起きていた。
+                # ASCII英数字のみを対象にした否定先読み・否定後読みに変更。
+                def _match_local_cls(letter, rc_str):
+                    pattern = rf'(?<![A-Za-z0-9]){letter}[0-9]{{0,3}}(?![A-Za-z0-9])'
+                    return bool(_re_lf.search(pattern, rc_str, _re_lf.IGNORECASE)) or f"{letter}級" in rc_str
+
                 if _re_lf.search(r'OP|オープン|重賞|Jpn', _rc, _re_lf.IGNORECASE):
                     _cls_detected = "OP"
-                elif _re_lf.search(r'\bA[0-9]*\b|A級', _rc, _re_lf.IGNORECASE):
+                elif _match_local_cls("A", _rc):
                     _cls_detected = "A"
-                elif _re_lf.search(r'\bB[0-9]*\b|B級', _rc, _re_lf.IGNORECASE):
+                elif _match_local_cls("B", _rc):
                     _cls_detected = "B"
-                elif _re_lf.search(r'\bC[0-9]*\b|C級', _rc, _re_lf.IGNORECASE):
+                elif _match_local_cls("C", _rc):
                     _cls_detected = "C"
                 else:
                     _cls_detected = ""
