@@ -1197,6 +1197,16 @@ def calc_phase1(
 
     _all_for_interval = list(past_races)   # 地方除外前・全走（出走間隔計算用）
 
+    # ── 競走除外・競走中止・出走取消（finish<=0）を過去走から除外
+    # calc_race_point()はfinish<=0ならNoneを返し得点計算からは除外するが、
+    # それより前段でこれを取り除いておかないと、下段の
+    # targets = past_races[:3]（直近3走選定）が除外/中止のレースも
+    # 1枠として数えてしまい、実質2走以下でしか評価されなくなる
+    # （NAR版の事後検証で発覚し、本家であるこちらにも同じ問題があることを確認）。
+    # 出走間隔計算用の_all_for_intervalは、実際に出走登録された事実自体は
+    # 変わらないため、あえてフィルター前のものを使う。
+    past_races = [pr for pr in past_races if getattr(pr, "finish", 0) and pr.finish > 0]
+
     # ── 地方走除外（v0.9 / v1.2バグ修正・順序修正 / v1.5①修正）
     # ※ 芝ダフィルターより先に地方除外を行う。
     #   先に芝ダフィルターをかけると「地方ダート走のみ」が残り、
@@ -1372,109 +1382,58 @@ def calc_phase1(
         if local_races:
             import re as _re_lf
             # 地方走を勝ち星でクラス分類
-            # ※ 地方のクラス表記は "C3組", "B7組" のように数字が1-3を超えることがある。
-            #   旧regex \bC[1-2]?\b → \bC[0-9]*\b に修正（v1.5）
             _lw = {"OP": 0, "A": 0, "B": 0, "C": 0, "不明": 0}
             _local_rc_debug = []   # デバッグ用：地方走のrace_classを記録
-            _compete_class   = ""  # 最も高いクラスの競走経験（勝敗問わず）
-            _CLASS_RANK = {"OP": 4, "A": 3, "B": 2, "C": 1}   # 高いほど格上
-
             for _lpr in local_races:
                 _local_rc_debug.append(
                     f"{_lpr.date}:{_lpr.race_class}({'1着' if _lpr.finish == 1 else f'{_lpr.finish}着'})"
                 )
-                _rc = _lpr.race_class
-                # クラス判定（勝敗問わず・競走クラスベース用）
-                # v1.5②修正：\b（単語境界）は漢字等のUnicode文字も
-                # 「単語文字」とみなすため、"サラ系C3"や"C2三　四"のように
-                # クラス表記へ直接漢字がくっつく実データで検出漏れが起きていた。
-                # ASCII英数字のみを対象にした否定先読み・否定後読みに変更。
-                def _match_local_cls(letter, rc_str):
-                    pattern = rf'(?<![A-Za-z0-9]){letter}[0-9]{{0,3}}(?![A-Za-z0-9])'
-                    return bool(_re_lf.search(pattern, rc_str, _re_lf.IGNORECASE)) or f"{letter}級" in rc_str
-
-                if _re_lf.search(r'OP|オープン|重賞|Jpn', _rc, _re_lf.IGNORECASE):
-                    _cls_detected = "OP"
-                elif _match_local_cls("A", _rc):
-                    _cls_detected = "A"
-                elif _match_local_cls("B", _rc):
-                    _cls_detected = "B"
-                elif _match_local_cls("C", _rc):
-                    _cls_detected = "C"
-                else:
-                    _cls_detected = ""
-
-                # 競走クラスベース：最高クラス経験を更新
-                if _cls_detected and _CLASS_RANK.get(_cls_detected, 0) > _CLASS_RANK.get(_compete_class, 0):
-                    _compete_class = _cls_detected
-
-                # 勝ち星カウント
                 if _lpr.finish != 1:
                     continue
-                if _cls_detected:
-                    _lw[_cls_detected] += 1
+                _rc = _lpr.race_class
+                if _re_lf.search(r'OP|オープン|重賞|Jpn', _rc, _re_lf.IGNORECASE):
+                    _lw["OP"] += 1
+                elif _re_lf.search(r'\bA[1-3]?\b|A級', _rc, _re_lf.IGNORECASE):
+                    _lw["A"] += 1
+                elif _re_lf.search(r'\bB[1-3]?\b|B級', _rc, _re_lf.IGNORECASE):
+                    _lw["B"] += 1
+                elif _re_lf.search(r'\bC[1-2]?\b|C級', _rc, _re_lf.IGNORECASE):
+                    _lw["C"] += 1
                 else:
+                    # クラス表記が不明だが勝ち星はある（C1相当として保守的に扱う）
                     _lw["不明"] += 1
 
             # result に地方走race_classリストを付加（デバッグパネル用）
             result._local_rc_debug = _local_rc_debug  # type: ignore[attr-defined]
 
-            # ── 勝ち星ベース換算テーブル（優先順：OP→A→B→C→不明）
+            # 換算テーブル（優先順：OP→A→B→C→不明）
+            # 「不明」は地方勝ち星はあるがクラス表記が認識できなかったケース → C1相当で保守的に扱う
             _LOCAL_EQUIV = [
-                ("OP",  1, "OP",             80.0),
-                ("A",   2, "3勝クラス",       84.0),
-                ("A",   1, "2勝クラス",       88.0),
-                ("B",   2, "2勝クラス",       88.0),
-                ("B",   1, "1勝クラス",       92.0),
-                ("C",   2, "1勝クラス",       92.0),
-                ("C",   1, "未勝利",          95.0),
+                ("OP",  1, "OP",        80.0),
+                ("A",   2, "3勝クラス", 84.0),
+                ("A",   1, "2勝クラス", 88.0),
+                ("B",   2, "2勝クラス", 88.0),
+                ("B",   1, "1勝クラス", 92.0),
+                ("C",   2, "1勝クラス", 92.0),
+                ("C",   1, "未勝利",    95.0),
                 ("不明",1, "未勝利(クラス不明)", 95.0),
             ]
-            _wins_pseudo = None
-            _wins_label  = ""
             for _cls, _min_w, _equiv_name, _equiv_base in _LOCAL_EQUIV:
                 if _lw[_cls] >= _min_w:
-                    _wins_pseudo = round(_equiv_base - 1.0, 3)   # 勝ち星ボーナス -1.0pt
-                    _wins_str    = "/".join(f"{k}{v}勝" for k, v in _lw.items() if v > 0)
-                    _wins_label  = f"{_wins_str}→{_equiv_name}相当(勝星)"
+                    # 勝ち星があるので winner bonus として -1.0pt
+                    _pseudo_avg = round(_equiv_base - 1.0, 3)
+                    # race_points に疑似値をセットして後続の min()/ability_avg 計算を通す
+                    race_points = [_pseudo_avg]
+                    result.valid_runs   = 1   # 疑似1走扱い
+                    _wins_str = "/".join(
+                        f"{k}{v}勝" for k, v in _lw.items() if v > 0
+                    )
+                    result.note = (
+                        result.note
+                        + f" [地方実績換算:{_wins_str}→{_equiv_name}相当]"
+                    ).strip()
+                    _fallback_applied = True
                     break
-
-            # ── 競走クラスベース換算テーブル（勝たずに昇格した馬への対応）
-            # 地方は賞金積み上げで昇格するため、直近クラスが実力指標になる。
-            # 勝ち星なしでそのクラスにいる場合は +0.5pt の未勝利ペナルティを追加。
-            _COMPETE_EQUIV = {
-                "OP": ("OP",        80.5),
-                "A":  ("2勝クラス", 88.5),
-                "B":  ("1勝クラス", 92.5),
-                "C":  ("未勝利",    95.5),
-            }
-            _compete_pseudo = None
-            _compete_label  = ""
-            if _compete_class and _compete_class in _COMPETE_EQUIV:
-                _ceq_name, _ceq_base = _COMPETE_EQUIV[_compete_class]
-                _compete_pseudo = round(_ceq_base, 3)
-                _compete_label  = f"{_compete_class}クラス出走→{_ceq_name}相当(競走歴)"
-
-            # ── 2軸のうち良い方（スコアが小さい＝有利）を採用
-            if _wins_pseudo is not None and _compete_pseudo is not None:
-                if _wins_pseudo <= _compete_pseudo:
-                    _pseudo_avg, _equiv_label = _wins_pseudo, _wins_label
-                else:
-                    _pseudo_avg, _equiv_label = _compete_pseudo, _compete_label
-            elif _wins_pseudo is not None:
-                _pseudo_avg, _equiv_label = _wins_pseudo, _wins_label
-            elif _compete_pseudo is not None:
-                _pseudo_avg, _equiv_label = _compete_pseudo, _compete_label
-            else:
-                _pseudo_avg, _equiv_label = None, ""
-
-            if _pseudo_avg is not None:
-                race_points = [_pseudo_avg]
-                result.valid_runs = 1
-                result.note = (
-                    result.note + f" [地方実績換算:{_equiv_label}]"
-                ).strip()
-                _fallback_applied = True
 
         if not _fallback_applied:
             result.note = (result.note + " 有効な走行データなし").strip()
