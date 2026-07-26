@@ -1316,6 +1316,17 @@ def calc_phase1(
             gap = 0.0
         elif pr.winner_time_sec > 0 and pr.time_sec > pr.winner_time_sec:
             gap = round(pr.time_sec - pr.winner_time_sec, 3)
+            # ── サニティチェック（v追加）：winner_time_secのスクレイピング
+            # 不良（0近辺への異常値等）により、time_sec-winner_time_secが
+            # 実際の着差(pr.margin)と大きく乖離するケースが実データで発覚
+            # （中京4R・エアアルチーナ：実際の着差1.6秒に対し、計算結果が
+            # 83.0秒という明らかな異常値になっていた）。NAR側では既に
+            # winner_time_secを信用せずmarginを直接使う設計にしていたが、
+            # JRA本家側は未対応だったため、同様の安全策を追加する。
+            # marginの方が実際の着差に近い信頼できる値である可能性が高いため、
+            # 乖離が大きい場合はmarginにフォールバックする。
+            if pr.margin > 0 and gap > max(pr.margin * 3, 5.0):
+                gap = pr.margin
         else:
             gap = pr.margin  # 直前馬差（秒）でフォールバック
 

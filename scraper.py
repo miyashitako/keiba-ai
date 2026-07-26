@@ -657,20 +657,23 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
             pr.time_sec  = time_to_sec(get(18))
             pr.margin    = margin_to_sec(get(19))
 
-            # 1着タイムの推定（v0.8追加）
-            # db_h_race_resultsの列20は「タイム差（1着との差）」が入っている場合がある
-            # 取れない場合はtime_secから着差累積で逆算
-            time_diff_str = get(20, "")
-            time_diff = time_to_sec(time_diff_str)
+            # 1着タイムの推定（v0.9修正）
+            # 旧v0.8では「列20にタイム差（1着との差）が入っている場合がある」
+            # という前提で列20の値を time_diff として読んでいたが、実際には
+            # 列20は「タイム指数」（netkeiba独自の速度指数で、着差とは無関係の
+            # 別指標）であることが判明した（中京4R・エアアルチーナの実データで
+            # 発覚：着差1.6秒の走行で列20の値が「83」となっており、これが
+            # そのままtime_diffとして winner_time_sec の計算に使われた結果、
+            # 大差負けペナルティが「83.0秒」という桁違いの値になっていた）。
+            # margin_to_sec()の返り値は馬身表記も含めて常に秒単位に変換済み
+            # （コメント参照）のため、素直に time_sec - margin で1着タイムを
+            # 逆算する方が信頼できる。旧フォールバック分岐の「margin×0.1」も、
+            # marginが既に秒単位である前提と矛盾する二重の単位バグだったため
+            # 合わせて廃止する。
             if pr.finish == 1:
                 pr.winner_time_sec = pr.time_sec
-            elif time_diff > 0:
-                # 列20がタイム差（秒）として取れた場合
-                pr.winner_time_sec = round(pr.time_sec - time_diff, 3)
             elif pr.margin > 0 and pr.time_sec > 0:
-                # フォールバック：直前馬差×0.1秒を着順分累積（粗い推定）
-                # 実際は累積できないが、1秒以上の差は大差負けとして検知可能
-                pr.winner_time_sec = round(pr.time_sec - pr.margin * 0.1, 3)
+                pr.winner_time_sec = round(pr.time_sec - pr.margin, 3)
 
             try:
                 pr.last3f = float(get(27, "0"))
