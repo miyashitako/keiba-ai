@@ -1236,9 +1236,19 @@ def calc_phase1(
     # v1.5①修正：is_local=Trueでも Jpn1/Jpn2/Jpn3 は中央扱い（交流重賞）。
     #   旧ロジックはvenue（開催場）のみで判定しており、
     #   大井・川崎等で開催される交流G1（JBCクラシック等）が全除外されていた。
+    # v1.6修正：_is_jpn_gradeが_normalize_grade()を経由せず生のrace_class
+    #   文字列に直接正規表現r'Jpn[123]'をかけていたため、netkeibaが実際に
+    #   使うローマ数字表記（"JpnIII"・"JpnII"・"JpnI"）を一度も検知できて
+    #   いなかった（マテンロウコマンド・東海S事後検証で発覚：地方交流重賞
+    #   5走のうち少なくとも3走がJpnIII/JpnII表記で、全て「地方走」として
+    #   誤って除外されていた。中央での2凡走（根岸S11着・武蔵野S10着）だけが
+    #   残り、実際は交流重賞で2勝2着2回3着1回着外0という好成績だったにも
+    #   関わらず、正反対の低評価になっていた）。_normalize_grade()は既に
+    #   ローマ数字→アラビア数字の変換に対応済み（GII等と同じ処理）なので、
+    #   ここでも同じ正規化を経由させる。
     import re as _re_local
     def _is_jpn_grade(race_class: str) -> bool:
-        return bool(_re_local.search(r'Jpn[123]', race_class))
+        return bool(_re_local.search(r'Jpn[123]', _normalize_grade(race_class)))
 
     central_races = [pr for pr in past_races if not pr.is_local or _is_jpn_grade(pr.race_class)]
     local_races   = [pr for pr in past_races if pr.is_local and not _is_jpn_grade(pr.race_class)]
