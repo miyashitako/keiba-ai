@@ -39,6 +39,52 @@ WEIGHT_FIELD_RATE = 0.5  # pt/kg（v1.5検証：北九州記念で0.3では不�
 st.title("🐎 競馬AI予想システム")
 st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応")
 
+# ── レース選択セレクトボックスの幅をコンパクト化（スマホ対応） ──────
+# st.columnsは比率を指定しても行全体の幅いっぱいに引き伸ばされてしまうため、
+# 比率調整だけでは「必要最小限の幅」にならない。ここでは各セレクトボックス
+# 自体の幅を、実際に表示され得る文字列の長さ（全角=2バイト・半角=1バイト
+# 換算）を基準にCSSで直接指定し、余白を切り詰める。
+#   競馬場　：全JRA10場とも漢字2文字（例"東京"）＝4バイト
+#   開催回　：「第N回」＝漢字2文字+半角数字1桁＝5バイト（最大でも1桁想定）
+#   開催日　：「N日目」〜「NN日目」＝漢字2文字+半角数字最大2桁＝最大6バイト
+#   レース番号：「NR」〜「NNR」＝半角数字最大2桁+半角英字1文字＝最大3バイト
+# ドロップダウンの矢印アイコン分の余白として、いずれも+2〜3ch程度を加算。
+# ※ data-testid ベースのセレクタはStreamlitのバージョンによって
+#   DOM構造が変わる可能性があるため、表示が崩れる場合はブラウザの
+#   開発者ツールで実際の要素を確認して数値を調整してください。
+st.markdown(
+    """
+    <style>
+    /* 1行目：競馬場・開催回 / 2行目：開催日・レース番号 の2つの横並びブロック */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1)
+        > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] {
+        max-width: 6.5ch;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1)
+        > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] {
+        max-width: 7.5ch;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2)
+        > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] {
+        max-width: 8.5ch;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2)
+        > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] {
+        max-width: 6ch;
+    }
+    /* 上記4つのセレクトボックスを含む列自体は、比率に関わらず
+       中身の幅だけを取るようにする（列が余白を持て余して間延びしないため） */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"] {
+        flex: 0 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ──────────────────────────────────────────────
 # セッション初期化
 # ──────────────────────────────────────────────
