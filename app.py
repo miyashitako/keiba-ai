@@ -95,6 +95,25 @@ st.markdown(
         min-width: 4.5ch !important;
         max-width: 4.5ch !important;
     }
+    /* inputを囲む「箱」（枠線・矢印アイコンを含む外側の見た目部分）。
+       直近の親（1階層だけ）に限定する">"を使うことで、間違って祖先全部
+       （列・行・ページ全体まで）を巻き込んで縮めてしまわないようにする。 */
+    div:has(> input[aria-label="競馬場"]) {
+        width: 7ch !important;
+        max-width: 7ch !important;
+    }
+    div:has(> input[aria-label="開催回"]) {
+        width: 8ch !important;
+        max-width: 8ch !important;
+    }
+    div:has(> input[aria-label="開催日"]) {
+        width: 9ch !important;
+        max-width: 9ch !important;
+    }
+    div:has(> input[aria-label="レース番号"]) {
+        width: 7ch !important;
+        max-width: 7ch !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
