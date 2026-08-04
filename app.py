@@ -55,12 +55,6 @@ st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性�
 st.markdown(
     """
     <style>
-    /* スマホ幅でもStreamlitが列を縦積みにしないよう、横並びを強制する */
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1),
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) {
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-    }
     /* 列自体は中身の幅だけを取り、余白を持て余して間延びしないようにする */
     div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"],
     div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"] {
@@ -73,46 +67,46 @@ st.markdown(
        Streamlitのバージョンでdata-testid・クラス名（st-emotion-cache-*）が
        変わってもaria-label（ラベル文字列そのもの）は変わらないため、
        こちらを直接の目印にする方が壊れにくい。
-       入力欄自体の幅に加え、:has()でその祖先（見た目の枠を作っている
-       div）の幅も合わせて縮める。*/
+       文字列長ちょうどだと詰まりすぎるため、+1ch分の余白を追加している
+       （もう少し余白が欲しい/狭くしたい場合はこの数値を増減してください）。*/
     input[aria-label="競馬場"] {
-        width: 4.5ch !important;
-        min-width: 4.5ch !important;
-        max-width: 4.5ch !important;
-    }
-    input[aria-label="開催回"] {
         width: 5.5ch !important;
         min-width: 5.5ch !important;
         max-width: 5.5ch !important;
     }
-    input[aria-label="開催日"] {
+    input[aria-label="開催回"] {
         width: 6.5ch !important;
         min-width: 6.5ch !important;
         max-width: 6.5ch !important;
     }
+    input[aria-label="開催日"] {
+        width: 7.5ch !important;
+        min-width: 7.5ch !important;
+        max-width: 7.5ch !important;
+    }
     input[aria-label="レース番号"] {
-        width: 4.5ch !important;
-        min-width: 4.5ch !important;
-        max-width: 4.5ch !important;
+        width: 5.5ch !important;
+        min-width: 5.5ch !important;
+        max-width: 5.5ch !important;
     }
     /* inputを囲む「箱」（枠線・矢印アイコンを含む外側の見た目部分）。
        直近の親（1階層だけ）に限定する">"を使うことで、間違って祖先全部
        （列・行・ページ全体まで）を巻き込んで縮めてしまわないようにする。 */
     div:has(> input[aria-label="競馬場"]) {
-        width: 7ch !important;
-        max-width: 7ch !important;
-    }
-    div:has(> input[aria-label="開催回"]) {
         width: 8ch !important;
         max-width: 8ch !important;
     }
-    div:has(> input[aria-label="開催日"]) {
+    div:has(> input[aria-label="開催回"]) {
         width: 9ch !important;
         max-width: 9ch !important;
     }
+    div:has(> input[aria-label="開催日"]) {
+        width: 10ch !important;
+        max-width: 10ch !important;
+    }
     div:has(> input[aria-label="レース番号"]) {
-        width: 7ch !important;
-        max-width: 7ch !important;
+        width: 8ch !important;
+        max-width: 8ch !important;
     }
     </style>
     """,
