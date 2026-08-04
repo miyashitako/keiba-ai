@@ -68,39 +68,54 @@ st.markdown(
         width: auto !important;
         min-width: 0 !important;
     }
-    /* セレクトボックス本体（BaseWeb/Reactコンポーネントのため、内部のインライン
-       スタイルに勝つよう複数階層に!importantで指定し、確実に上書きする） */
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] > div,
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"] > div {
+
+    /* セレクトボックス本体（react-aria版：実体は<input aria-label="...">）。
+       Streamlitのバージョンでdata-testid・クラス名（st-emotion-cache-*）が
+       変わってもaria-label（ラベル文字列そのもの）は変わらないため、
+       こちらを直接の目印にする方が壊れにくい。
+       入力欄自体の幅に加え、:has()でその祖先（見た目の枠を作っている
+       div）の幅も合わせて縮める。*/
+    input[aria-label="競馬場"] {
+        width: 4.5ch !important;
+        min-width: 4.5ch !important;
+        max-width: 4.5ch !important;
+    }
+    input[aria-label="開催回"] {
+        width: 5.5ch !important;
+        min-width: 5.5ch !important;
+        max-width: 5.5ch !important;
+    }
+    input[aria-label="開催日"] {
         width: 6.5ch !important;
-        max-width: 6.5ch !important;
         min-width: 6.5ch !important;
+        max-width: 6.5ch !important;
     }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] > div,
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"] > div {
-        width: 7.5ch !important;
-        max-width: 7.5ch !important;
-        min-width: 7.5ch !important;
+    input[aria-label="レース番号"] {
+        width: 4.5ch !important;
+        min-width: 4.5ch !important;
+        max-width: 4.5ch !important;
     }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] > div,
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"] > div {
-        width: 8.5ch !important;
-        max-width: 8.5ch !important;
-        min-width: 8.5ch !important;
+    /* 上記inputを内包する祖先div（見た目の枠・矢印アイコンを含むボックス）
+       も合わせて縮める。矢印アイコン分の余白として+2.5ch程度を加算。 */
+    div:has(> input[aria-label="競馬場"]),
+    div:has(input[aria-label="競馬場"]) {
+        width: 7ch !important;
+        max-width: 7ch !important;
     }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] > div,
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"] > div {
-        width: 6ch !important;
-        max-width: 6ch !important;
-        min-width: 6ch !important;
+    div:has(> input[aria-label="開催回"]),
+    div:has(input[aria-label="開催回"]) {
+        width: 8ch !important;
+        max-width: 8ch !important;
+    }
+    div:has(> input[aria-label="開催日"]),
+    div:has(input[aria-label="開催日"]) {
+        width: 9ch !important;
+        max-width: 9ch !important;
+    }
+    div:has(> input[aria-label="レース番号"]),
+    div:has(input[aria-label="レース番号"]) {
+        width: 7ch !important;
+        max-width: 7ch !important;
     }
     </style>
     """,
