@@ -95,28 +95,6 @@ st.markdown(
         min-width: 4.5ch !important;
         max-width: 4.5ch !important;
     }
-    /* 上記inputを内包する祖先div（見た目の枠・矢印アイコンを含むボックス）
-       も合わせて縮める。矢印アイコン分の余白として+2.5ch程度を加算。 */
-    div:has(> input[aria-label="競馬場"]),
-    div:has(input[aria-label="競馬場"]) {
-        width: 7ch !important;
-        max-width: 7ch !important;
-    }
-    div:has(> input[aria-label="開催回"]),
-    div:has(input[aria-label="開催回"]) {
-        width: 8ch !important;
-        max-width: 8ch !important;
-    }
-    div:has(> input[aria-label="開催日"]),
-    div:has(input[aria-label="開催日"]) {
-        width: 9ch !important;
-        max-width: 9ch !important;
-    }
-    div:has(> input[aria-label="レース番号"]),
-    div:has(input[aria-label="レース番号"]) {
-        width: 7ch !important;
-        max-width: 7ch !important;
-    }
     </style>
     """,
     unsafe_allow_html=True,
