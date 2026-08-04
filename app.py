@@ -55,30 +55,52 @@ st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性�
 st.markdown(
     """
     <style>
-    /* 1行目：競馬場・開催回 / 2行目：開催日・レース番号 の2つの横並びブロック */
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1)
-        > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] {
-        max-width: 6.5ch;
+    /* スマホ幅でもStreamlitが列を縦積みにしないよう、横並びを強制する */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1),
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) {
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
     }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1)
-        > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] {
-        max-width: 7.5ch;
-    }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2)
-        > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] {
-        max-width: 8.5ch;
-    }
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2)
-        > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] {
-        max-width: 6ch;
-    }
-    /* 上記4つのセレクトボックスを含む列自体は、比率に関わらず
-       中身の幅だけを取るようにする（列が余白を持て余して間延びしないため） */
+    /* 列自体は中身の幅だけを取り、余白を持て余して間延びしないようにする */
     div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"],
     div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"] {
         flex: 0 1 auto !important;
-        min-width: 0 !important;
         width: auto !important;
+        min-width: 0 !important;
+    }
+    /* セレクトボックス本体（BaseWeb/Reactコンポーネントのため、内部のインライン
+       スタイルに勝つよう複数階層に!importantで指定し、確実に上書きする） */
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] > div,
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"] > div {
+        width: 6.5ch !important;
+        max-width: 6.5ch !important;
+        min-width: 6.5ch !important;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] > div,
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"] > div {
+        width: 7.5ch !important;
+        max-width: 7.5ch !important;
+        min-width: 7.5ch !important;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) div[data-testid="stSelectbox"] > div,
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(1) [data-baseweb="select"] > div {
+        width: 8.5ch !important;
+        max-width: 8.5ch !important;
+        min-width: 8.5ch !important;
+    }
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) div[data-testid="stSelectbox"] > div,
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"],
+    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"]:nth-child(2) [data-baseweb="select"] > div {
+        width: 6ch !important;
+        max-width: 6ch !important;
+        min-width: 6ch !important;
     }
     </style>
     """,
