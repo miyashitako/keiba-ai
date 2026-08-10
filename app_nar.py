@@ -25,7 +25,11 @@ import datetime
 import streamlit as st
 
 import calculator_nar as cn
-from scraper_nar import fetch_all_horses_nar, build_nar_race_id
+from scraper_nar import (
+    fetch_all_horses_nar,
+    fetch_all_horses_nar_backtest,
+    build_nar_race_id,
+)
 
 
 st.set_page_config(
@@ -115,17 +119,33 @@ with col_r:
 if venue not in cn.NAR_VENUE_JOCKEY_LEADING:
     st.info(f"※ {venue}のリーディング表が未登録です。騎手ボーナスは0で計算されます。")
 
-run = st.button("予想を実行", type="primary")
+backtest_mode = st.toggle(
+    "検証モード（終了済みレースの答え合わせ）",
+    value=False,
+    help="ONにすると、指定したレースの確定結果ページ(result.html)から実際の着順・"
+         "人気を取得し、予想と突き合わせて表示します。まだ発走前のレースには使えません。",
+)
+
+run = st.button("検証を実行" if backtest_mode else "予想を実行", type="primary")
 
 if run:
     race_id = build_nar_race_id(venue, race_date, race_no)
     st.caption(f"race_id={race_id}")
 
-    with st.spinner("出走表・過去走を取得中...（頭数が多いと数十秒かかります）"):
+    spinner_label = (
+        "確定結果・過去走を取得中..." if backtest_mode
+        else "出走表・過去走を取得中...（頭数が多いと数十秒かかります）"
+    )
+    with st.spinner(spinner_label):
         try:
-            race_info, horses = fetch_all_horses_nar(
-                venue, race_date, race_no, past_limit=5
-            )
+            if backtest_mode:
+                race_info, horses = fetch_all_horses_nar_backtest(
+                    venue, race_date, race_no, past_limit=5
+                )
+            else:
+                race_info, horses = fetch_all_horses_nar(
+                    venue, race_date, race_no, past_limit=5
+                )
         except Exception as e:
             st.error(f"データ取得に失敗しました: {e}")
             st.stop()
@@ -165,20 +185,46 @@ if run:
     # Phase4（レース解像度指数）
     phase4 = cn.calc_phase4(adjusted)
 
-    st.subheader("■ 予想ランキング（小さいほど高評価）")
+    st.subheader("■ 予想ランキング（小さいほど高評価）" + ("／答え合わせ" if backtest_mode else ""))
     horse_map = {h.number: h for h in horses}
     table_rows = []
+    top3_pred = [r.horse_number for r in adjusted[:3]]
     for i, r in enumerate(adjusted, 1):
         h = horse_map.get(r.horse_number)
         jockey = h.jockey if h else "?"
-        table_rows.append({
+        row = {
             "予想順位": i,
             "馬番": r.horse_number,
             "馬名": r.horse_name,
             "騎手": jockey,
             "スコア": round(r.phase2_score, 2),
-        })
+        }
+        if backtest_mode:
+            actual_finish = getattr(h, "actual_finish", "?") if h else "?"
+            actual_pop = getattr(h, "actual_popularity", "?") if h else "?"
+            mark = ""
+            if isinstance(actual_finish, int) and actual_finish > 0:
+                if i <= 3 and actual_finish <= 3:
+                    mark = "○的中"
+                elif i <= 3 and actual_finish >= 8:
+                    mark = "×大外れ"
+            row["実際着順"] = f"{actual_finish}着"
+            row["人気"] = f"{actual_pop}人気"
+            row["判定"] = mark
+        table_rows.append(row)
     st.dataframe(table_rows, use_container_width=True, hide_index=True)
+
+    if backtest_mode:
+        top3_actual = sorted(
+            h.number for h in horses
+            if isinstance(getattr(h, "actual_finish", 0), int)
+            and 1 <= h.actual_finish <= 3
+        )
+        hit_count = len(set(top3_pred) & set(top3_actual))
+        col_x, col_y, col_z = st.columns(3)
+        col_x.metric("予想上位3頭", str(top3_pred))
+        col_y.metric("実際の上位3頭", str(top3_actual))
+        col_z.metric("重複数", f"{hit_count}/3")
 
     with st.expander("各馬の詳細note（大差負け・近走不振・地区転入等の内訳）"):
         for r in adjusted:
