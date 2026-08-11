@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.4-gojuon_katakana_kumi"
+__version__ = "2.5-large_margin_and_single_race_gates_removed"
 
 # calculator.py の汎用ロジック・データクラスをそのまま再利用
 from calculator import (
@@ -494,10 +494,20 @@ def get_class_base_nar(race_class: str) -> float:
 # 今回の指摘（着差を見ずに大敗と決めつける問題）とは性質が異なるため、
 # JRA側の値をそのまま維持する（変更対象外）。
 NAR_LARGE_MARGIN_TRIGGER = 1.5   # この着差を超えなければ「大差負け」扱いしない
+# v2.5：大差負けペナルティを無効化（0.0に設定）。
+# 地方競馬では「着差だけ見ると大敗」でも、展開・馬場・格上挑戦等の事情で
+# 実力を反映していないケースが多く、このペナルティで評価を下げた結果、
+# 実際にはその馬が普通に好走・勝利してしまうというケースが実運用で
+# 何度も確認された（こうすけさんの実戦知見に基づく判断）。
+# 閾値・テーブルの構造自体は将来の再調整に備えて残しておく（値を0にする
+# ことで無効化する形にし、必要になれば数値を戻すだけで復活できるように
+# している）。
+# なお、相対順位ペナルティ（RELATIVE_FINISH_PENALTY・着順/頭数の比率）は
+# 着差を見ない別軸の指標のため、今回の対象外（変更しない）。
 NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大きい閾値から判定
-    (5.0, 3.0),
-    (3.0, 2.0),
-    (1.5, 1.0),
+    (5.0, 0.0),
+    (3.0, 0.0),
+    (1.5, 0.0),
 ]
 
 # ── NAR独自の近走不振ペナルティ（着差ベース・複数走傾向でのみ発動） ────────
@@ -909,9 +919,13 @@ NAR_BEST_BONUS_CONFIRM_MARGIN = 2.5  # この差以内なら「好走傾向を�
 def calc_phase2_nar(phase1) -> "Phase2Result":
     """
     calculator.pyのcalc_phase2()のNAR版。
-    best_bonus（単発好走への加点）に「2走以上が一定水準以内でないと発動
-    しない」確認ゲートを追加した点のみが異なる。instability_penaltyの
-    計算式自体はJRA側と同一（変更対象外）。
+
+    v2.1で「2走以上が一定水準以内でないとbest_bonusが発動しない」確認
+    ゲートを追加したが、v2.5で撤廃した。地方競馬では「直近3走中2走が
+    凡走・1走だけ好走」という単発好走馬が実際に好走・勝利するケースが
+    実運用上ひんぱんに確認されたため（こうすけさんの実戦知見に基づく
+    判断）。calc_phase2()と実質的に同じ計算になるが、将来的にNAR側で
+    別の調整を入れる可能性に備えて、関数自体はNAR専用のまま残している。
     """
     r = Phase2Result(
         horse_name=phase1.horse_name,
@@ -933,18 +947,8 @@ def calc_phase2_nar(phase1) -> "Phase2Result":
 
     r.std_dev = round(statistics.stdev(phase1.corrected_times), 3)
 
-    # ── 確認ゲート：best_timeに近い（=好走傾向を裏付ける）走が2走以上あるか
-    confirm_count = sum(
-        1 for t in phase1.corrected_times
-        if (t - phase1.best_time) <= NAR_BEST_BONUS_CONFIRM_MARGIN
-    )
-
     best_gap = phase1.ability_avg - phase1.best_time
-    if confirm_count >= 2:
-        r.best_bonus = round(best_gap * BEST_BONUS_FACTOR, 3)
-    else:
-        r.best_bonus = 0.0
-        r.note = (r.note + " [単発好走のためbest_bonus不発動]").strip()
+    r.best_bonus = round(best_gap * BEST_BONUS_FACTOR, 3)
 
     r.instability_penalty = round(r.std_dev * INSTABILITY_FACTOR, 3)
     r.phase2_score = round(
