@@ -228,8 +228,8 @@ if run:
 
     with st.expander("各馬の詳細note（大差負け・近走不振・地区転入等の内訳）"):
         for r in adjusted:
-            if r.note:
-                st.markdown(f"**{r.horse_number}番 {r.horse_name}**：{r.note}")
+            note_text = r.note if r.note else "（特記事項なし）"
+            st.markdown(f"**{r.horse_number}番 {r.horse_name}**：{note_text}")
 
     st.subheader("■ Phase4：レース解像度指数")
     col_a, col_b = st.columns(2)
