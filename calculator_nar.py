@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.5-large_margin_and_single_race_gates_removed"
+__version__ = "2.6-phase5_paddock_bias_muddy_exposed"
 
 # calculator.py の汎用ロジック・データクラスをそのまま再利用
 from calculator import (
@@ -66,6 +66,9 @@ from calculator import (
     calc_phase4,
     build_ranking,
     apply_phase5,
+    PADDOCK_BONUS,
+    TRACK_BIAS_BONUS,
+    MUDDY_TRACK_BONUS,
     judge_running_style,
     calc_running_style,
     calc_pace_bias_bonus,
@@ -74,6 +77,13 @@ from calculator import (
     CONDITION_BONUS_TABLE,
 )
 import copy
+
+# ──────────────────────────────────────────────
+# Phase5（人間確認：パドック・馬場バイアス・重馬場適性）はJRA/NARで
+# ロジックの差がないため、calculator.pyのapply_phase5をそのまま流用する
+# （上のimportブロックで再エクスポート済み。calculator_nar.apply_phase5
+# として呼び出し可能）。NAR固有の値テーブルは不要。
+# ──────────────────────────────────────────────
 
 
 # ──────────────────────────────────────────────

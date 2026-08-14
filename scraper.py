@@ -193,32 +193,19 @@ KNOWN_HANDICAP_RACES: set[str] = {
 # レース情報取得
 # ──────────────────────────────────────────────
 
-def fetch_race_info(race_url: str) -> RaceInfo:
+def _parse_race_info_from_soup(soup: "BeautifulSoup", race_id: str) -> RaceInfo:
     """
-    shutuba_past.html からレース情報を取得する
+    レース情報ページ（shutuba_past.html / result.html いずれも）共通のパース処理。
 
-    取得元:
-    - RaceData01: '14:30発走 /芝1600m(左 A)\n/ 天候:曇/ 馬場:良'
-    - RaceData02: '4回東京4日目サラ系３歳以上２勝クラス...'
-    - title: '鷹巣山特別(2勝クラス) ... 2025年10月12日 東京9R'
-    - h1.RaceName: 'レース名'
+    v1.6追加：JRA側にもバックテスト（事後検証）機能を追加するにあたり、
+    fetch_race_info（出走前ページ用）から共通ロジックを切り出したもの。
+    result.html（確定結果ページ）でも RaceData01/RaceData02/h1.RaceName の
+    構造は shutuba_past.html と同じであることを前提にしている
+    （NAR側のfetch_race_result_narと同じ前提。両ページとも同一テンプレート
+    を使っていることをこれまでの実データ確認で把握しているが、result.html
+    側で万一構造が異なる場合は個別に調整すること）。
     """
-    race_id = extract_race_id(race_url)
     info = RaceInfo(race_id=race_id or "")
-
-    shutuba_url = f"https://race.netkeiba.com/race/shutuba_past.html?race_id={race_id}"
-    try:
-        res = requests.get(shutuba_url, headers=HEADERS, timeout=15)
-        res.encoding = "EUC-JP"
-    except Exception:
-        return info
-
-    if res.status_code != 200:
-        return info
-
-    # race.netkeiba.comはUTF-8（v1.1修正）
-    html_text = res.content.decode("utf-8", errors="replace")
-    soup = BeautifulSoup(html_text, "html.parser")
 
     # ── レース名
     race_name_el = soup.find("h1", class_="RaceName")
@@ -380,6 +367,36 @@ def fetch_race_info(race_url: str) -> RaceInfo:
                 break
 
     return info
+
+
+def fetch_race_info(race_url: str) -> RaceInfo:
+    """
+    shutuba_past.html からレース情報を取得する（出走前ページ）
+
+    取得元:
+    - RaceData01: '14:30発走 /芝1600m(左 A)\n/ 天候:曇/ 馬場:良'
+    - RaceData02: '4回東京4日目サラ系３歳以上２勝クラス...'
+    - title: '鷹巣山特別(2勝クラス) ... 2025年10月12日 東京9R'
+    - h1.RaceName: 'レース名'
+    """
+    race_id = extract_race_id(race_url)
+    info = RaceInfo(race_id=race_id or "")
+
+    shutuba_url = f"https://race.netkeiba.com/race/shutuba_past.html?race_id={race_id}"
+    try:
+        res = requests.get(shutuba_url, headers=HEADERS, timeout=15)
+        res.encoding = "EUC-JP"
+    except Exception:
+        return info
+
+    if res.status_code != 200:
+        return info
+
+    # race.netkeiba.comはUTF-8（v1.1修正）
+    html_text = res.content.decode("utf-8", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    return _parse_race_info_from_soup(soup, race_id or "")
 
 
 # ──────────────────────────────────────────────
@@ -710,6 +727,159 @@ def fetch_all_horses(race_url: str, past_limit: int = 5) -> tuple[RaceInfo, list
         if horse.horse_id:
             try:
                 horse.past_races = fetch_past_races(horse.horse_id, limit=past_limit)
+            except Exception as e:
+                horse.past_races = []
+                print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
+            time.sleep(1.0)
+
+    return race_info, horses
+
+
+# ──────────────────────────────────────────────
+# 事後検証（バックテスト）用：確定結果ページから取得（v1.6追加）
+# ──────────────────────────────────────────────
+#
+# NAR側（scraper_nar.fetch_race_result_nar / fetch_all_horses_nar_backtest）と
+# 同じ設計をJRAに移植したもの。
+#
+# ★列構成は未検証★：NAR側で実データ確認済みだった
+#   0:着順 1:枠 2:馬番 3:馬名 4:性齢 5:斤量 6:騎手 7:タイム 8:着差
+#   9:人気 10:単勝オッズ 11:後3F 12:厩舎 13:馬体重(増減)
+# という並びを、同じnetkeibaのテンプレート系列であることを前提に
+# JRA側（race.netkeiba.com/race/result.html）にもそのまま適用している。
+# JRAのresult.htmlで実際にこの並びと一致するかはまだ実データで確認できて
+# いないため、初回使用時は必ず取得結果を1レース分ざっと目視確認し、
+# 着順・馬番・馬名・人気などがズレていないかチェックすること。
+# ズレていた場合は cols[n] のインデックスをここで調整する。
+
+def fetch_race_result(race_id: str) -> tuple[RaceInfo, list[Horse]]:
+    """
+    race.netkeiba.com/race/result.html から確定結果を取得する（事後検証用）。
+
+    レース終了後はshutuba_past.html（出走前ページ）の出走表テーブルが
+    使えなくなる（もしくは内容が確定前のまま）ケースがあるため、
+    「日をまたいで同じレースを検証したい」場合はこちらを使う。
+
+    Returns
+    -------
+    (RaceInfo, list[Horse])
+        Horseオブジェクトには実際の着順・タイム・人気を
+        actual_finish / actual_time_str / actual_margin_str / actual_popularity
+        として追加する（dataclassの標準フィールドではなく、setattrで動的に付与）。
+    """
+    result_url = f"https://race.netkeiba.com/race/result.html?race_id={race_id}"
+
+    try:
+        res = requests.get(result_url, headers=HEADERS, timeout=15)
+    except Exception as e:
+        raise ConnectionError(f"確定結果の取得に失敗しました: {e}")
+    if res.status_code != 200:
+        raise ConnectionError(f"HTTPエラー: {res.status_code}")
+
+    html_text = res.content.decode("utf-8", errors="replace")
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    race_info = _parse_race_info_from_soup(soup, race_id)
+
+    tables = soup.find_all("table")
+    if not tables:
+        raise ValueError("結果テーブルが見つかりませんでした。")
+    table = tables[0]
+    rows = table.find_all("tr")[1:]
+
+    horses: list[Horse] = []
+    for row in rows:
+        cols = row.find_all("td")
+        if len(cols) < 9:
+            continue
+
+        h = Horse()
+        actual_finish_text = cols[0].get_text(strip=True)
+        try:
+            actual_finish = int(actual_finish_text)
+        except Exception:
+            actual_finish = 0   # 失格・中止等（"取消""除外""中止"等の文字列）
+
+        try:
+            h.frame = int(cols[1].get_text(strip=True))
+        except Exception:
+            pass
+        try:
+            h.number = int(cols[2].get_text(strip=True))
+        except Exception:
+            pass
+
+        name_cell = cols[3]
+        horse_link = name_cell.find("a", href=re.compile(r"/horse/\d+"))
+        if horse_link:
+            h.horse_id = extract_horse_id(horse_link["href"]) or ""
+            h.name = horse_link.get_text(strip=True)
+        else:
+            h.name = name_cell.get_text(strip=True)[:10]
+        if not h.name:
+            continue
+
+        sex_age_text = cols[4].get_text(strip=True)
+        if sex_age_text:
+            if sex_age_text[0] in ("牡", "牝"):
+                h.sex = sex_age_text[0]
+            elif sex_age_text[0] in ("セ", "騸"):
+                h.sex = "セ"
+
+        try:
+            val = float(cols[5].get_text(strip=True))
+            if 40.0 <= val <= 65.0:
+                h.weight_carried = val
+        except Exception:
+            pass
+
+        jockey_link = cols[6].find("a", href=re.compile(r"/jockey/"))
+        h.jockey = jockey_link.get_text(strip=True) if jockey_link else cols[6].get_text(strip=True)
+
+        # 実績値（Horseの標準フィールドにはないため動的付与）
+        h.actual_finish = actual_finish
+        h.actual_time_str = cols[7].get_text(strip=True) if len(cols) > 7 else ""
+        h.actual_margin_str = cols[8].get_text(strip=True) if len(cols) > 8 else ""
+        h.actual_popularity = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+
+        horses.append(h)
+
+    return race_info, horses
+
+
+def fetch_all_horses_backtest(
+    race_url: str,
+    past_limit: int = 5,
+) -> tuple[RaceInfo, list[Horse]]:
+    """
+    レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
+    各馬の過去走も取得する（NAR側fetch_all_horses_nar_backtestと同じ設計）。
+
+    重要：このレース自体が対象馬の「最新の過去走」としてfetch_past_racesに
+    含まれてしまうため、race_infoのrace_dateと同じ日付の過去走は除外してから
+    Phase1に渡すこと（データリーク防止）。このため本関数はpast_limit+3件
+    多めに取得し、対象レース当日の記録を自動的にフィルタして返す。
+    """
+    race_id = extract_race_id(race_url)
+    if not race_id:
+        raise ValueError(f"race_id をURLから取得できませんでした: {race_url}")
+
+    race_info, horses = fetch_race_result(race_id)
+
+    # race_infoのrace_date（例："2026年8月14日"）を
+    # fetch_past_races側の日付表記（例："2026/08/14"）に変換してフィルタに使う
+    target_date_str = None
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", race_info.race_date or "")
+    if m:
+        target_date_str = f"{int(m.group(1))}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
+
+    for horse in horses:
+        if horse.horse_id:
+            try:
+                raw_past = fetch_past_races(horse.horse_id, limit=past_limit + 3)
+                if target_date_str:
+                    raw_past = [pr for pr in raw_past if pr.date != target_date_str]
+                horse.past_races = raw_past[:past_limit]
             except Exception as e:
                 horse.past_races = []
                 print(f"[WARN] {horse.name} の過去走取得失敗: {e}")

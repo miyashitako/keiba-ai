@@ -6,7 +6,7 @@ Phase1〜Phase5 + 距離フィルター・競馬場・騎手適性対応
 import streamlit as st
 import pandas as pd
 
-from scraper import fetch_all_horses, RaceInfo
+from scraper import fetch_all_horses, fetch_all_horses_backtest, RaceInfo
 try:
     from calculator import (
         calc_phase1, calc_phase2, calc_phase2_all,
@@ -37,81 +37,7 @@ st.set_page_config(
 WEIGHT_FIELD_RATE = 0.5  # pt/kg（v1.5検証：北九州記念で0.3では不足→0.5に変更）
 
 st.title("🐎 競馬AI予想システム")
-st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応")
-
-# ── レース選択セレクトボックスの幅をコンパクト化（スマホ対応） ──────
-# st.columnsは比率を指定しても行全体の幅いっぱいに引き伸ばされてしまうため、
-# 比率調整だけでは「必要最小限の幅」にならない。ここでは各セレクトボックス
-# 自体の幅を、実際に表示され得る文字列の長さ（全角=2バイト・半角=1バイト
-# 換算）を基準にCSSで直接指定し、余白を切り詰める。
-#   競馬場　：全JRA10場とも漢字2文字（例"東京"）＝4バイト
-#   開催回　：「第N回」＝漢字2文字+半角数字1桁＝5バイト（最大でも1桁想定）
-#   開催日　：「N日目」〜「NN日目」＝漢字2文字+半角数字最大2桁＝最大6バイト
-#   レース番号：「NR」〜「NNR」＝半角数字最大2桁+半角英字1文字＝最大3バイト
-# ドロップダウンの矢印アイコン分の余白として、いずれも+2〜3ch程度を加算。
-# ※ data-testid ベースのセレクタはStreamlitのバージョンによって
-#   DOM構造が変わる可能性があるため、表示が崩れる場合はブラウザの
-#   開発者ツールで実際の要素を確認して数値を調整してください。
-st.markdown(
-    """
-    <style>
-    /* 列自体は中身の幅だけを取り、余白を持て余して間延びしないようにする */
-    div[data-testid="stHorizontalBlock"]:nth-of-type(1) > div[data-testid="column"],
-    div[data-testid="stHorizontalBlock"]:nth-of-type(2) > div[data-testid="column"] {
-        flex: 0 1 auto !important;
-        width: auto !important;
-        min-width: 0 !important;
-    }
-
-    /* セレクトボックス本体（react-aria版：実体は<input aria-label="...">）。
-       Streamlitのバージョンでdata-testid・クラス名（st-emotion-cache-*）が
-       変わってもaria-label（ラベル文字列そのもの）は変わらないため、
-       こちらを直接の目印にする方が壊れにくい。
-       文字列長ちょうどだと詰まりすぎるため、+1ch分の余白を追加している
-       （もう少し余白が欲しい/狭くしたい場合はこの数値を増減してください）。*/
-    input[aria-label="競馬場"] {
-        width: 5.5ch !important;
-        min-width: 5.5ch !important;
-        max-width: 5.5ch !important;
-    }
-    input[aria-label="開催回"] {
-        width: 6.5ch !important;
-        min-width: 6.5ch !important;
-        max-width: 6.5ch !important;
-    }
-    input[aria-label="開催日"] {
-        width: 7.5ch !important;
-        min-width: 7.5ch !important;
-        max-width: 7.5ch !important;
-    }
-    input[aria-label="レース番号"] {
-        width: 5.5ch !important;
-        min-width: 5.5ch !important;
-        max-width: 5.5ch !important;
-    }
-    /* inputを囲む「箱」（枠線・矢印アイコンを含む外側の見た目部分）。
-       直近の親（1階層だけ）に限定する">"を使うことで、間違って祖先全部
-       （列・行・ページ全体まで）を巻き込んで縮めてしまわないようにする。 */
-    div:has(> input[aria-label="競馬場"]) {
-        width: 8ch !important;
-        max-width: 8ch !important;
-    }
-    div:has(> input[aria-label="開催回"]) {
-        width: 9ch !important;
-        max-width: 9ch !important;
-    }
-    div:has(> input[aria-label="開催日"]) {
-        width: 10ch !important;
-        max-width: 10ch !important;
-    }
-    div:has(> input[aria-label="レース番号"]) {
-        width: 8ch !important;
-        max-width: 8ch !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応 | 答え合わせモード対応(v1.6)")
 
 # ──────────────────────────────────────────────
 # セッション初期化
@@ -125,6 +51,7 @@ for key, default in [
     ("phase5_applied", False),
     ("phase3_results", None),    # Phase3（会場・騎手）適用済みキャッシュ
     ("running_styles", {}),      # {horse_number: running_style} 脚質キャッシュ
+    ("backtest_mode", False),    # v1.6追加：答え合わせモード（確定結果比較）
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -167,10 +94,10 @@ VENUE_MAX_KAI = {
 }
 
 # 各場の1開催あたり最大日数
-# 東京・京都は12日開催あり、函館は年により12日開催の場合あり、他は8日
+# 東京・京都は12日開催あり、他は8日
 VENUE_MAX_NICHI = {
     "01": 8,   # 札幌
-    "02": 12,  # 函館（2026年1回函館は12日開催）
+    "02": 8,   # 函館
     "03": 8,   # 福島
     "04": 8,   # 新潟
     "05": 12,  # 東京（12日開催あり）
@@ -247,14 +174,29 @@ with st.expander("🔬 検証モード・URL直接入力（上級設定）", exp
 # 手動URLが入力されていればそちらを優先
 race_url = race_url_manual.strip() if st.session_state.get("race_url_manual", "").strip() else race_url_generated
 
+# ── 答え合わせモード（v1.6追加）─────────────────
+# 「直近1走を除外する（検証モード）」（既存機能・出走前ページ基準）とは別物。
+# こちらはレース終了後の確定結果ページ(result.html)から実際の着順・人気を
+# 取得し、予想と突き合わせて的中/大外れを表示する（NAR版app_nar.pyと同じ機能）。
+backtest_mode = st.toggle(
+    "🎯 答え合わせモード（終了済みレースの確定結果と予想を比較）",
+    value=False,
+    help="ONにすると、確定結果ページ(result.html)から実際の着順・人気を取得し、"
+         "予想と突き合わせて表示します。まだ発走前のレースには使えません。",
+)
+
 fetch_btn = st.button("🔍 データ取得", type="primary")
 
 if fetch_btn:
     with st.spinner("データ取得中... （各馬の過去走取得のため1〜2分かかります）"):
         try:
-            race_info, horses = fetch_all_horses(race_url, past_limit=5)
+            if backtest_mode:
+                race_info, horses = fetch_all_horses_backtest(race_url, past_limit=5)
+            else:
+                race_info, horses = fetch_all_horses(race_url, past_limit=5)
             st.session_state.race_info    = race_info
             st.session_state.horses       = horses
+            st.session_state.backtest_mode = backtest_mode
             st.session_state.phase5_applied = False
             st.session_state.phase3_results = None
             st.session_state.running_styles = {
@@ -516,12 +458,14 @@ if st.session_state.phase2_results:
     else:
         _pace_base = st.session_state.phase3_results or []
 
-    # ── フィールド相対斤量補正（v1.5 / 案A：ハンデ戦のみ適用）─────────────
-    # ハンデ戦のみ適用。race_info.weight_type が "ハンデ" と判定された場合のみ実行。
-    # 案Bの全レース一律適用は北九州記念1件で検証後、案Aへ切り替え（v1.5）。
+    # ── フィールド相対斤量補正（v1.5追加）─────────────────────────────
+    # 今回レースの全馬斤量平均を基準に、軽い馬を有利・重い馬を不利に補正。
+    # 案B（全レース一律）で検証中。
+    # race_info.weight_type == "ハンデ" 判定が安定したら
+    #   「if not ri or ri.weight_type == "ハンデ":」に切り替えて案Aへ移行可能。
     _horses_for_weight = st.session_state.horses
     _weights = [h.weight_carried for h in _horses_for_weight if h.weight_carried > 0]
-    if ri and ri.weight_type == "ハンデ" and len(_weights) >= 2:
+    if len(_weights) >= 2:
         import statistics as _stats
         _field_avg_w = _stats.mean(_weights)
         _wt_adjusted = []
@@ -633,6 +577,9 @@ if st.session_state.phase2_results:
     # ────────────────────────────────────────────────────────────────────
 
     table_data = []
+    notes_by_horse = {}   # v1.6：メモをテーブルから分離し、専用expanderで表示する
+    _is_backtest = st.session_state.get("backtest_mode", False)
+    top3_pred = [r.horse_number for r in ranking[:3]]
     for rank, r in enumerate(ranking, 1):
         if use_phase2:
             score  = r.phase2_score
@@ -664,7 +611,9 @@ if st.session_state.phase2_results:
             elif _wc_diff <= -2.0:
                 _note_with_flag = f"✅斤量{_wc_diff:.1f}kg減 {_note_with_flag}".strip()
 
-        table_data.append({
+        notes_by_horse[r.horse_number] = _note_with_flag
+
+        row = {
             "予想順位":   rank,
             "馬番":       r.horse_number,
             "馬名":       r.horse_name,
@@ -673,14 +622,48 @@ if st.session_state.phase2_results:
             "ベスト":     best,
             "標準偏差":   std,
             "走数":       r.valid_runs,
-            "メモ":       _note_with_flag,
-        })
+        }
+
+        # ── 答え合わせモード：実際の着順・人気・的中判定を追加（v1.6追加）
+        if _is_backtest:
+            actual_finish = getattr(_h_obj, "actual_finish", "?") if _h_obj else "?"
+            actual_pop    = getattr(_h_obj, "actual_popularity", "?") if _h_obj else "?"
+            mark = ""
+            if isinstance(actual_finish, int) and actual_finish > 0:
+                if rank <= 3 and actual_finish <= 3:
+                    mark = "○的中"
+                elif rank <= 3 and actual_finish >= 8:
+                    mark = "×大外れ"
+            row["実際着順"] = f"{actual_finish}着"
+            row["人気"]     = f"{actual_pop}人気"
+            row["判定"]     = mark
+
+        table_data.append(row)
 
     df = pd.DataFrame(table_data)
     try:
         st.dataframe(df, width="stretch", hide_index=True)
     except Exception:
         st.dataframe(df, hide_index=True)
+
+    # ── 答え合わせモード：予想上位3頭 vs 実際の上位3頭サマリー（v1.6追加）──
+    if _is_backtest:
+        top3_actual = sorted(
+            h.number for h in st.session_state.horses
+            if isinstance(getattr(h, "actual_finish", 0), int)
+            and 1 <= h.actual_finish <= 3
+        )
+        hit_count = len(set(top3_pred) & set(top3_actual))
+        col_x, col_y, col_z = st.columns(3)
+        col_x.metric("予想上位3頭", str(top3_pred))
+        col_y.metric("実際の上位3頭", str(top3_actual))
+        col_z.metric("重複数", f"{hit_count}/3")
+
+    # ── 各馬の詳細メモ（v1.6追加：テーブルから分離してexpander表示）────
+    with st.expander("各馬の詳細メモ（上り馬フラグ・斤量増減・地区転入・展開補正等の内訳）"):
+        for r in ranking:
+            note_text = notes_by_horse.get(r.horse_number, "") or "（特記事項なし）"
+            st.markdown(f"**{r.horse_number}番 {r.horse_name}**：{note_text}")
 
     # ③ Phase4
     st.header("③ Phase4 レース解像度")
@@ -849,4 +832,4 @@ with st.expander("手動で馬データを入力する"):
         st.rerun()
 
 st.divider()
-st.caption("競馬AI予想システム v1.0 | 着順・着差・クラスベース Phase1 + 距離適性・格ボーナス・昇級勢い・競馬場・騎手適性 | 検証モード対応")
+st.caption("競馬AI予想システム v1.6 | 着順・着差・クラスベース Phase1 + 距離適性・格ボーナス・昇級勢い・競馬場・騎手適性 | 検証モード・答え合わせモード対応")

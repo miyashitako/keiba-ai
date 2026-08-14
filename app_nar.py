@@ -1,11 +1,20 @@
 """
-地方競馬(NAR)AI予想システム Streamlit UI（v0.1・新規作成）
+地方競馬(NAR)AI予想システム Streamlit UI（v0.2・Phase5対応）
 
 run_nar_prediction.py（コマンドライン版）と同じPhase1〜4のパイプラインを
 Streamlit UIから実行できるようにしたもの。app.py（JRA版）と同じ考え方で、
 レース選択セレクトボックスの見た目をコンパクト化している。
 
-★注意：このファイルはこのセッションで新規に書き起こしたばかりで、
+v0.2で追加：
+  - Phase5（パドック・馬場バイアス・重馬場適性の人間確認）に対応。
+    calculator_nar.apply_phase5（実体はcalculator.pyのapply_phase5をそのまま
+    再エクスポートしたもの。JRA/NARでロジック差がないため計算側の改修は
+    不要だった）を呼び出す。
+  - Phase5適用ボタンを押すたびに再フェッチが走らないよう、fetch結果
+    （race_info・horses・Phase3までの結果）をst.session_stateに保持する
+    方式に変更（app.pyと同じ設計）。
+
+★注意：このファイルはこのセッションで書き起こしたばかりで、
 実際にStreamlitを起動しての動作確認・ブラウザでの見た目確認は
 まだ行えていない（このサンドボックス環境からnetkeiba等への
 ネットワークアクセスができないため）。お手元の環境で実際に
@@ -108,6 +117,20 @@ NAR_VENUES = [
     "園田", "姫路", "高知", "佐賀", "門別", "金沢",
 ]
 
+# ──────────────────────────────────────────────
+# セッション初期化（v0.2追加：Phase5適用のため状態を保持）
+# ──────────────────────────────────────────────
+for key, default in [
+    ("nar_race_info", None),
+    ("nar_horses", []),
+    ("nar_phase3_results", None),   # Phase3（会場・馬場・騎手）適用済みキャッシュ
+    ("nar_phase5_applied", False),
+    ("nar_display_results", None),  # 表示用：Phase5適用済みならそちら、未適用ならPhase3
+    ("nar_backtest_mode", False),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
 col_v, col_d, col_r = st.columns([1, 1, 1])
 with col_v:
     venue = st.selectbox("競馬場", NAR_VENUES)
@@ -150,20 +173,6 @@ if run:
             st.error(f"データ取得に失敗しました: {e}")
             st.stop()
 
-    st.subheader(race_info.race_name)
-    st.write(
-        f"距離/馬場：{race_info.surface}{race_info.distance}m ({race_info.direction})　"
-        f"馬場状態：{race_info.track_cond}　クラス：{race_info.race_class}　"
-        f"出走頭数：{len(horses)}"
-    )
-
-    no_past_data = [h.name for h in horses if not h.past_races]
-    if no_past_data:
-        st.warning(
-            f"過去走データが0件の馬：{', '.join(no_past_data)}"
-            "（新馬・地方転入直後等の可能性。有効走数0としてPhase1で処理されます）"
-        )
-
     # Phase1〜2
     phase1_results = cn.calc_phase1_all_nar(
         horses,
@@ -182,14 +191,47 @@ if run:
         target_track_cond=race_info.track_cond,
     )
 
-    # Phase4（レース解像度指数）
-    phase4 = cn.calc_phase4(adjusted)
+    # ── フェッチ結果をセッションに保存（Phase5をあとから適用するため）──
+    st.session_state.nar_race_info       = race_info
+    st.session_state.nar_horses          = horses
+    st.session_state.nar_phase3_results  = adjusted
+    st.session_state.nar_display_results = adjusted
+    st.session_state.nar_phase5_applied  = False
+    st.session_state.nar_backtest_mode   = backtest_mode
+
+# ──────────────────────────────────────────────
+# 以降はセッションに保存済みのデータを使って表示
+# （runボタンを押していない再実行時＝Phase5適用ボタン押下時にも
+#   このブロックが走るようにするため、if run: の外に出している）
+# ──────────────────────────────────────────────
+
+if st.session_state.nar_race_info is not None:
+    race_info = st.session_state.nar_race_info
+    horses = st.session_state.nar_horses
+    backtest_mode = st.session_state.nar_backtest_mode
+
+    st.subheader(race_info.race_name)
+    st.write(
+        f"距離/馬場：{race_info.surface}{race_info.distance}m ({race_info.direction})　"
+        f"馬場状態：{race_info.track_cond}　クラス：{race_info.race_class}　"
+        f"出走頭数：{len(horses)}"
+    )
+
+    no_past_data = [h.name for h in horses if not h.past_races]
+    if no_past_data:
+        st.warning(
+            f"過去走データが0件の馬：{', '.join(no_past_data)}"
+            "（新馬・地方転入直後等の可能性。有効走数0としてPhase1で処理されます）"
+        )
+
+    # 表示用ランキング：Phase5適用済みならそちら、未適用ならPhase3結果
+    display_results = st.session_state.nar_display_results
 
     st.subheader("■ 予想ランキング（小さいほど高評価）" + ("／答え合わせ" if backtest_mode else ""))
     horse_map = {h.number: h for h in horses}
     table_rows = []
-    top3_pred = [r.horse_number for r in adjusted[:3]]
-    for i, r in enumerate(adjusted, 1):
+    top3_pred = [r.horse_number for r in display_results[:3]]
+    for i, r in enumerate(display_results, 1):
         h = horse_map.get(r.horse_number)
         jockey = h.jockey if h else "?"
         row = {
@@ -227,9 +269,12 @@ if run:
         col_z.metric("重複数", f"{hit_count}/3")
 
     with st.expander("各馬の詳細note（大差負け・近走不振・地区転入等の内訳）"):
-        for r in adjusted:
+        for r in display_results:
             note_text = r.note if r.note else "（特記事項なし）"
             st.markdown(f"**{r.horse_number}番 {r.horse_name}**：{note_text}")
+
+    # Phase4（レース解像度指数）：表示用データ（Phase5適用済みなら反映後）から再計算
+    phase4 = cn.calc_phase4(display_results)
 
     st.subheader("■ Phase4：レース解像度指数")
     col_a, col_b = st.columns(2)
@@ -239,7 +284,65 @@ if run:
     with col_b:
         st.write(f"上位3頭：{phase4.top3_horses}")
 
-    st.caption(
-        "Phase5（パドック・枠バイアス・重馬場適性の人間確認）は、"
-        "現地/映像でのパドックチェック後、別途 cn.apply_phase5() で実施してください。"
-    )
+    # ──────────────────────────────────────────────
+    # Phase5：人間確認（パドック・馬場バイアス・重馬場適性）v0.2追加
+    # ──────────────────────────────────────────────
+    st.subheader("■ Phase5 人間確認（パドック・馬場バイアス・重馬場適性）")
+    with st.expander("パドック評価・馬場バイアスを入力する", expanded=False):
+        track_bias = st.selectbox(
+            "馬場バイアス", ["フラット", "内有利", "外有利"], key="nar_track_bias_select"
+        )
+        st.write("**各馬評価**（◎ ○ × から選択）")
+
+        paddock_ratings = {}
+        frame_positions = {}
+        muddy_ratings = {}
+
+        h1, h2, h3, h4 = st.columns([3, 2, 2, 2])
+        h2.caption("パドック")
+        h3.caption("枠位置")
+        h4.caption("重馬場")
+
+        all_horses_sorted = sorted(horses, key=lambda h: h.number)
+        for h in all_horses_sorted:
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+            with c1:
+                st.write(f"**{h.number}番 {h.name}**")
+            with c2:
+                paddock = st.selectbox(
+                    "パドック", ["パドック—", "◎", "○", "×"],
+                    key=f"nar_p5_paddock_{h.number}_{h.name}", label_visibility="collapsed",
+                )
+                paddock_ratings[h.number] = paddock
+            with c3:
+                pos = st.selectbox(
+                    "枠位置", ["枠—", "内", "外"],
+                    key=f"nar_p5_pos_{h.number}_{h.name}", label_visibility="collapsed",
+                )
+                if pos not in ("—", "枠—"):
+                    frame_positions[h.number] = pos
+            with c4:
+                muddy = st.selectbox(
+                    "重馬場", ["馬場—", "得意", "不得意"],
+                    key=f"nar_p5_muddy_{h.number}_{h.name}", label_visibility="collapsed",
+                )
+                muddy_ratings[h.number] = muddy
+
+        if st.button("✅ Phase5補正を適用", type="primary", key="nar_apply_phase5_btn"):
+            # 常にPhase3キャッシュ（st.session_state.nar_phase3_results）を
+            # 起点にする（app.pyと同じ考え方：Phase5を何度押しても
+            # 前回のPhase5補正の上に積み上がらないようにするため）。
+            p3_base = st.session_state.nar_phase3_results
+            adjusted5 = cn.apply_phase5(
+                p3_base, paddock_ratings, track_bias, frame_positions, muddy_ratings,
+            )
+            st.session_state.nar_display_results = adjusted5
+            st.session_state.nar_phase5_applied = True
+            st.rerun()
+
+    if st.session_state.nar_phase5_applied:
+        st.success("✅ Phase5補正済みランキングを表示中")
+        if st.button("Phase5補正を解除（Phase3時点に戻す）", key="nar_reset_phase5_btn"):
+            st.session_state.nar_display_results = st.session_state.nar_phase3_results
+            st.session_state.nar_phase5_applied = False
+            st.rerun()
