@@ -37,7 +37,7 @@ st.set_page_config(
 WEIGHT_FIELD_RATE = 0.5  # pt/kg（v1.5検証：北九州記念で0.3では不足→0.5に変更）
 
 st.title("🐎 競馬AI予想システム")
-st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応 | 答え合わせモード対応(v1.6)")
+st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応 | 答え合わせモード対応(v1.7)")
 
 # ──────────────────────────────────────────────
 # セッション初期化
@@ -158,13 +158,9 @@ race_url_generated = f"https://race.netkeiba.com/race/shutuba.html?race_id={race
 
 st.caption(f"🔗 `{race_id}`　{race_url_generated}")
 
-# ── 検証モード & URL直接入力（折りたたみ） ───────
-with st.expander("🔬 検証モード・URL直接入力（上級設定）", expanded=False):
-    st.caption("**検証モード**：過去レースで検証する場合、ONにすると直近1走を除外してスコアを計算します。")
-    _skip_toggle = st.checkbox("直近1走を除外する（検証モード）", value=False, key="skip_runs_slider")
-    skip_runs = 1 if _skip_toggle else 0
-    st.divider()
-    st.caption("**URL直接入力**：URLを直接貼り付ける場合はこちら（プルダウン設定より優先）")
+# ── URL直接入力（折りたたみ） ───────
+with st.expander("🔗 URL直接入力（上級設定）", expanded=False):
+    st.caption("URLを直接貼り付ける場合はこちら（プルダウン設定より優先）")
     race_url_manual = st.text_input(
         "netkeibaのレースURLを直接入力",
         placeholder="https://race.netkeiba.com/race/shutuba.html?race_id=202505040409",
@@ -174,10 +170,11 @@ with st.expander("🔬 検証モード・URL直接入力（上級設定）", exp
 # 手動URLが入力されていればそちらを優先
 race_url = race_url_manual.strip() if st.session_state.get("race_url_manual", "").strip() else race_url_generated
 
-# ── 答え合わせモード（v1.6追加）─────────────────
-# 「直近1走を除外する（検証モード）」（既存機能・出走前ページ基準）とは別物。
-# こちらはレース終了後の確定結果ページ(result.html)から実際の着順・人気を
-# 取得し、予想と突き合わせて的中/大外れを表示する（NAR版app_nar.pyと同じ機能）。
+# ── 答え合わせモード ─────────────────
+# v1.7：旧「直近1走を除外する（検証モード）」は、確定結果ページ(result.html)
+# ベースの本モードと役割が重複し、トグルが2つあると紛らわしいため廃止。
+# 答え合わせモードは対象レース当日の記録を自動除外する設計（データリーク
+# 防止）のため、過去のレースを検証したい場合はこちらのモードだけで足りる。
 backtest_mode = st.toggle(
     "🎯 答え合わせモード（終了済みレースの確定結果と予想を比較）",
     value=False,
@@ -208,13 +205,12 @@ if fetch_btn:
             st.session_state["age_limited_auto"] = race_info.is_age_limited
             st.session_state["classic_distance_auto"] = race_info.is_classic_distance
 
-            # Phase1（検証モード：先頭skip_runs走をスキップ）
-            _skip = 1 if st.session_state.get("skip_runs_slider", False) else 0
+            # Phase1
             _age  = st.session_state.get("age_limited_toggle", race_info.is_age_limited)
             _cls  = race_info.is_classic_distance
             p1_results = [
                 calc_phase1(
-                    h.name, h.number, h.past_races[_skip:],
+                    h.name, h.number, h.past_races,
                     target_distance=race_info.distance,
                     target_surface=race_info.surface,
                     current_class=race_info.race_class,
@@ -238,6 +234,14 @@ if fetch_btn:
             st.success(f"✅ {len(horses)}頭のデータを取得しました")
             if race_info.is_age_limited:
                 st.info(f"🐴 馬齢限定戦を自動検出しました（格ボーナスを統合評価）")
+
+            # ── 過去走データ0件の馬へのアラート（v1.7追加：NAR版app_nar.pyと同じ考え方）
+            _no_past_data = [h.name for h in horses if not h.past_races]
+            if _no_past_data:
+                st.warning(
+                    f"過去走データが0件の馬：{', '.join(_no_past_data)}"
+                    "（新馬・地方転入直後等の可能性。有効走数0としてPhase1で処理されます）"
+                )
 
             # ── デバッグパネル（性別・列4の取得状況）──────────────────
             # 来週以降のエラー再現時に原因特定するための情報を常時記録
@@ -832,4 +836,4 @@ with st.expander("手動で馬データを入力する"):
         st.rerun()
 
 st.divider()
-st.caption("競馬AI予想システム v1.6 | 着順・着差・クラスベース Phase1 + 距離適性・格ボーナス・昇級勢い・競馬場・騎手適性 | 検証モード・答え合わせモード対応")
+st.caption("競馬AI予想システム v1.7 | 着順・着差・クラスベース Phase1 + 距離適性・格ボーナス・昇級勢い・競馬場・騎手適性 | 答え合わせモード対応")
