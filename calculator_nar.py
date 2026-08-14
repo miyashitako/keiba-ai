@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.6-phase5_paddock_bias_muddy_exposed"
+__version__ = "2.7-momentum_bonus_and_phase2_2run_threshold"
 
 # calculator.py の汎用ロジック・データクラスをそのまま再利用
 from calculator import (
@@ -540,6 +540,63 @@ NAR_FORM_PENALTY_CAP = 2.0      # 近走不振ペナルティ単体の上限
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 
 
+# ── NAR版 昇級勢い（v2.7追加） ────────────────────────────────
+# JRA版calc_momentum_bonus()の移植。これまで「地方競馬はクラス変動が
+# JRAより頻繁（1着にならなくても昇級することが多い）ため、JRA版をそのまま
+# 持ち込むと誤判定が増える」としてv1スコープ外・移植保留にしていたが、
+# 2026/8/13大井3R・タツノロマンスの事後検証（新馬3着→C3八九十1着→
+# [今回]C3六七八、単勝1.3倍の1番人気で実際に1着だったにも関わらず予想
+# 8番手評価だった）で、「前走で現級（または上位の組）を勝ったばかりの
+# 馬」を評価できていない実害が具体的に確認されたため実装する。
+#
+# JRAとの違い：
+# - クラス順序の比較にはget_class_base_nar()を使う（数値が小さいほど
+#   格上。JRAの_get_class_order（数値が大きいほど格上）とは大小が逆）。
+# - get_class_base_nar()は「組」による細分化（例：同じC3でも六七八組と
+#   八九十組で0.4pt/組の差がつく）まで織り込み済みのため、A/B/C文字
+#   単位の比較よりも精密に「同一クラス内の組の昇格」まで拾える。
+def calc_momentum_bonus_nar(
+    past_races: list,
+    current_class: str,
+) -> tuple:
+    """
+    NAR用 昇級勢い指数。
+    前走クラス（組補正込みの基準値）より今回のほうが格上の場合に補正を返す。
+    戻り値は (ボーナス値, ラベル)。該当なしなら (0.0, "")。
+    ボーナス値は「スコアから引くポイント数」（正値=ボーナス、負値=ペナルティ）。
+    格下げにはペナルティを付与しない（格上からの降格は力量上位のため）。
+    """
+    if not past_races:
+        return 0.0, ""
+    prev = past_races[0]
+    if prev.finish <= 0:
+        return 0.0, ""
+
+    prev_base = get_class_base_nar(prev.race_class)
+    curr_base = get_class_base_nar(current_class)
+
+    # 基準値が小さいほど格上。浮動小数誤差対策で微小な差は「同格」扱いにする。
+    if curr_base < prev_base - 0.05:   # 昇級（組の格上げ含む）
+        if prev.finish != 1:
+            # 前走で勝っていない昇級（他馬の回避等の特殊ケース）→ ペナルティ
+            return -0.5, "昇級(前走非勝利)"
+
+        # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
+        recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
+        win_count = sum(1 for pr in recent5 if pr.finish == 1)
+        if win_count >= 3:
+            return 1.5, f"昇級勢い(通算{win_count}勝)"
+
+        # 前走1着：margin（2着馬との着差）で勝ち方を判定
+        if prev.margin >= 0.5:
+            return 1.5, "昇級(圧勝)"
+        elif prev.margin >= 0.2:
+            return 0.5, "昇級(順当勝ち)"
+        else:
+            return -0.75, "昇級(僅差勝ち)"
+    return 0.0, ""
+
+
 def calc_recent_form_penalty_nar(targets: list) -> tuple:
     """
     直近走（calc_phase1_narで使うtargetsと同一集合、最大3走）から、
@@ -640,6 +697,7 @@ def calc_phase1_nar(
     target_venue: str = "",
     use_grade_bonus: bool = True,
     use_dist_aptitude: bool = True,
+    use_momentum: bool = True,
     race_date: str = "",
 ) -> Phase1Result:
     """
@@ -649,6 +707,8 @@ def calc_phase1_nar(
     - 地方走除外ロジックなし（全過去走がそのまま評価対象）
     - クラス基準値はget_class_base_nar()を使用（「組」補正込み）
     - 地区間転厩ボーナス（南関東→他地区等）を追加
+    - 昇級勢い（calc_momentum_bonus_nar）はv2.7で追加移植済み
+      （get_class_base_nar()の「組」補正を利用した精密な昇級判定）
     - 障害転向・馬齢限定OP読み替え・牝馬混合好走ボーナス・
       JRA固有レース名ペナルティは実装しない（v1スコープ外）
     """
@@ -838,6 +898,15 @@ def calc_phase1_nar(
             result.best_time    = round(result.best_time    - grade_b, 3)
             result.note = (result.note + f" [格B:-{grade_b:.1f}]").strip()
 
+    # ── 昇級勢い（v2.7追加。get_class_base_nar()の「組」補正込みで判定）
+    if use_momentum and current_class:
+        momentum_pt, momentum_label = calc_momentum_bonus_nar(past_races_all, current_class)
+        if momentum_pt != 0:
+            result.phase1_score = round(result.phase1_score - momentum_pt, 3)
+            result.ability_avg  = round(result.ability_avg  - momentum_pt, 3)
+            result.best_time    = round(result.best_time    - momentum_pt, 3)
+            result.note = (result.note + f" [{momentum_label}:{momentum_pt:+.2f}]").strip()
+
     # ── 距離適性ボーナス（calculator.pyの関数をそのまま流用）
     if use_dist_aptitude and target_distance > 0:
         dist_bonus, dist_label = calc_distance_aptitude_bonus(
@@ -936,6 +1005,16 @@ def calc_phase2_nar(phase1) -> "Phase2Result":
     実運用上ひんぱんに確認されたため（こうすけさんの実戦知見に基づく
     判断）。calc_phase2()と実質的に同じ計算になるが、将来的にNAR側で
     別の調整を入れる可能性に備えて、関数自体はNAR専用のまま残している。
+
+    v2.7：有効走数の足切りラインを「3走未満は完全スキップ」から
+    「2走未満は完全スキップ」に緩和。2026/8/13大井3R・タツノロマンス
+    （有効走数2走・前走で現級の一段上の組を勝ったばかり・単勝1.3倍の
+    1番人気が実際に1着）の事後検証で、有効走数2走の馬がbest_bonus
+    （好走傾向の裏付けボーナス）を一切受けられず、走数の多い馬に比べて
+    不利になっていた実害が確認されたため。standard deviation（std_dev）は
+    データ点が2つあれば計算可能（statistics.stdevはn>=2で動作）なので、
+    技術的な制約はない。データ点1つ（valid_runs==1）の場合は分散が
+    定義できないため、引き続きPhase1スコアそのまま（Phase2調整なし）とする。
     """
     r = Phase2Result(
         horse_name=phase1.horse_name,
@@ -950,7 +1029,7 @@ def calc_phase2_nar(phase1) -> "Phase2Result":
         r.phase2_score = phase1.phase1_score
         return r
 
-    if phase1.valid_runs < 3:
+    if phase1.valid_runs < 2:
         r.phase2_score = phase1.phase1_score
         r.std_dev = 0.0
         return r
