@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 
 from scraper import fetch_all_horses, fetch_all_horses_backtest, RaceInfo
+from results_logger import log_backtest_results
 try:
     from calculator import (
         calc_phase1, calc_phase2, calc_phase2_all,
@@ -662,6 +663,21 @@ if st.session_state.phase2_results:
         col_x.metric("予想上位3頭", str(top3_pred))
         col_y.metric("実際の上位3頭", str(top3_actual))
         col_z.metric("重複数", f"{hit_count}/3")
+
+        # ── Google Sheetsへの記録（v1.8追加）────────────────
+        if st.button("📝 この結果をGoogle Sheetsに記録", key="jra_log_to_sheets_btn"):
+            with st.spinner("Google Sheetsに記録中..."):
+                ok, msg = log_backtest_results(
+                    system="JRA",
+                    race_info=st.session_state.race_info,
+                    horses=st.session_state.horses,
+                    display_results=ranking,
+                    phase5_applied=st.session_state.get("phase5_applied", False),
+                )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     # ── 各馬の詳細メモ（v1.6追加：テーブルから分離してexpander表示）────
     with st.expander("各馬の詳細メモ（上り馬フラグ・斤量増減・地区転入・展開補正等の内訳）"):

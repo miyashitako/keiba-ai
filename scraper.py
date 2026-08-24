@@ -5,6 +5,7 @@ netkeiba スクレイピングモジュール
 """
 
 import requests
+import datetime
 from bs4 import BeautifulSoup
 import re
 import time
@@ -517,11 +518,18 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
 # 各馬過去走取得
 # ──────────────────────────────────────────────
 
-def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
+def fetch_past_races(horse_id: str, limit: "int | None" = 5) -> list[PastRace]:
     """
     馬の過去走データを取得する（最大limit走）
     URL: https://db.netkeiba.com/horse/result/{horse_id}/
     テーブル: db_h_race_results
+
+    v1.8：limit=None を指定すると打ち切りをせず、そのページに表示されて
+    いる全走を取得する（過去日付バックテスト・バッチスクリプト用）。
+    db.netkeiba.comの馬個別ページは通常その馬の生涯成績を1ページに
+    まとめて表示しているため（競走馬の出走数は数十走程度に収まることが
+    ほとんど）、ページネーションなしで全走を取得できる想定。極端に出走数が
+    多い馬（100走超級のベテラン等）ではこの前提が崩れる可能性があり未検証。
 
     確定列定義:
     00:日付 01:開催 04:レース名 11:着順 12:騎手 13:斤量
@@ -705,10 +713,30 @@ def fetch_past_races(horse_id: str, limit: int = 5) -> list[PastRace]:
         if pr.distance > 0 and pr.finish > 0:
             past_races.append(pr)
 
-        if len(past_races) >= limit:
+        if limit is not None and len(past_races) >= limit:
             break
 
     return past_races
+
+
+def filter_past_races_before(past_races: list, cutoff_date: str) -> list:
+    """
+    過去走リストを「cutoff_date（"YYYY/MM/DD"形式）より前」だけに絞り込み、
+    新しい順（降順）に並べ替えて返す（v1.8追加：過去日付バックテスト用）。
+
+    netkeibaの日付表記（"2026/07/12"のようにゼロ埋め）は文字列比較が
+    そのまま日付比較として機能するため、datetimeへの変換は行わない
+    （他の日付フィルタ箇所と表記を合わせるため）。
+
+    fetch_past_races(horse_id, limit=None)で取得した「生涯全走」に対して
+    使うことを想定している。同日付の走（対象レースそのもの）も除外する
+    （厳密な「より前」判定のため <= ではなく < を使う）。
+    """
+    if not cutoff_date:
+        return past_races
+    filtered = [pr for pr in past_races if pr.date and pr.date < cutoff_date]
+    filtered.sort(key=lambda pr: pr.date, reverse=True)
+    return filtered
 
 
 # ──────────────────────────────────────────────
@@ -841,6 +869,7 @@ def fetch_race_result(race_id: str) -> tuple[RaceInfo, list[Horse]]:
         h.actual_time_str = cols[7].get_text(strip=True) if len(cols) > 7 else ""
         h.actual_margin_str = cols[8].get_text(strip=True) if len(cols) > 8 else ""
         h.actual_popularity = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+        h.actual_odds = cols[10].get_text(strip=True) if len(cols) > 10 else ""
 
         horses.append(h)
 
@@ -850,17 +879,35 @@ def fetch_race_result(race_id: str) -> tuple[RaceInfo, list[Horse]]:
 def fetch_all_horses_backtest(
     race_url: str,
     past_limit: int = 5,
+    horse_cache: "dict | None" = None,
+    sleep_sec: float = 1.0,
 ) -> tuple[RaceInfo, list[Horse]]:
     """
     レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
     各馬の過去走も取得する（NAR側fetch_all_horses_nar_backtestと同じ設計）。
 
-    重要：このレース自体が対象馬の「最新の過去走」としてfetch_past_racesに
-    含まれてしまうため、race_infoのrace_dateと同じ日付の過去走は除外してから
-    Phase1に渡すこと（データリーク防止）。このため本関数はpast_limit+3件
-    多めに取得し、対象レース当日の記録を自動的にフィルタして返す。
+    v1.8：任意の過去日付を正しく検証できるよう改修。
+    以前は「同じ日付の過去走だけ除外」という設計だったため、対象レースより
+    後（未来）に走ったレースが過去走に混入するデータリークがあった
+    （目先の1走しか正しく検証できない制約の原因だった）。
+    今回からは fetch_past_races(horse_id, limit=None) で生涯全走を取得し、
+    filter_past_races_before() で「対象レースの日付より前」だけに絞り込む
+    ため、何ヶ月・何年前のレースでも正しく検証できる。
+
+    horse_cache : {horse_id: 生涯全走list[PastRace]} の辞書を渡すと、
+        同じ馬について複数レースをまたいで再取得しない（batch_backtest.py
+        のような一括処理で、同じ馬が何度も出走している場合の重複リクエスト
+        を防ぐ）。Noneの場合は毎回取得する（単発の答え合わせモード用）。
+
+    race_url : "https://race.netkeiba.com/race/....?race_id=XXXX"形式の
+        URLでも、12桁のrace_id文字列を直接渡してもどちらでもよい
+        （v1.8追加：batch_backtest.pyはfetch_jra_race_ids_for_dateで
+        得た素のrace_idをそのまま渡す）。
     """
-    race_id = extract_race_id(race_url)
+    if re.fullmatch(r"\d{8,}", race_url.strip()):
+        race_id = race_url.strip()
+    else:
+        race_id = extract_race_id(race_url)
     if not race_id:
         raise ValueError(f"race_id をURLから取得できませんでした: {race_url}")
 
@@ -874,15 +921,61 @@ def fetch_all_horses_backtest(
         target_date_str = f"{int(m.group(1))}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
 
     for horse in horses:
-        if horse.horse_id:
-            try:
-                raw_past = fetch_past_races(horse.horse_id, limit=past_limit + 3)
-                if target_date_str:
-                    raw_past = [pr for pr in raw_past if pr.date != target_date_str]
-                horse.past_races = raw_past[:past_limit]
-            except Exception as e:
-                horse.past_races = []
-                print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
-            time.sleep(1.0)
+        if not horse.horse_id:
+            continue
+        try:
+            if horse_cache is not None and horse.horse_id in horse_cache:
+                full_history = horse_cache[horse.horse_id]
+            else:
+                full_history = fetch_past_races(horse.horse_id, limit=None)
+                if horse_cache is not None:
+                    horse_cache[horse.horse_id] = full_history
+                time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
+
+            if target_date_str:
+                horse.past_races = filter_past_races_before(full_history, target_date_str)[:past_limit]
+            else:
+                horse.past_races = full_history[:past_limit]
+        except Exception as e:
+            horse.past_races = []
+            print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
 
     return race_info, horses
+
+
+# ──────────────────────────────────────────────
+# 開催日程の列挙（v1.8追加：日付範囲バッチ処理用）
+# ──────────────────────────────────────────────
+
+def fetch_jra_race_ids_for_date(date) -> list[str]:
+    """
+    指定日にJRAで開催された全レースのrace_idを取得する。
+    race.netkeiba.com/top/race_list.html?kaisai_date=YYYYMMDD を利用。
+
+    JRAのrace_idは「年+競馬場コード+開催回+開催日次+レース番号」という
+    構成で、開催回・開催日次は事前に分からないと機械的に組み立てられない
+    （NARのように日付から直接計算できない）。そのため、この関数で
+    まず当日の開催スケジュールページからrace_idを丸ごと抽出する。
+
+    ★このサンドボックス環境からはnetkeibaへネットワーク到達できないため、
+    実際のページ構造は未検証。href属性から race_id=(12桁数字) という
+    パターンを正規表現で総当たり抽出する設計にしているため、多少ページの
+    HTML構造が想定と違っても取得できる可能性は高いが、初回使用時は必ず
+    件数（1日あたり多くても36レース程度）が妥当か目視確認すること。
+    """
+    if isinstance(date, datetime.date):
+        date_str = f"{date.year:04d}{date.month:02d}{date.day:02d}"
+    else:
+        date_str = str(date).replace("-", "").replace("/", "")
+
+    url = f"https://race.netkeiba.com/top/race_list.html?kaisai_date={date_str}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=15)
+    except Exception as e:
+        raise ConnectionError(f"開催日程の取得に失敗しました（{date_str}）: {e}")
+    if res.status_code != 200:
+        return []
+
+    html_text = res.content.decode("utf-8", errors="replace")
+    race_ids = sorted(set(re.findall(r"race_id=(\d{12})", html_text)))
+    return race_ids

@@ -25,6 +25,7 @@ LOCAL_VENUES判定に既に対応済みのため、原則そのまま動く想�
 import datetime
 import re
 import unicodedata
+import time
 from typing import Optional
 
 # ── RaceData02からのクラス抽出用候補リスト ─────────────────────────
@@ -85,6 +86,7 @@ from scraper import (
     extract_race_id,
     extract_horse_id,
     fetch_past_races,   # db.netkeiba.com/horse/result/ は中央・地方共通なのでそのまま使う
+    filter_past_races_before,   # v1.8追加：過去日付バックテスト用の絞り込み
     KNOWN_HANDICAP_RACES,
 )
 
@@ -646,6 +648,7 @@ def fetch_race_result_nar(race_id: str) -> tuple[RaceInfo, list]:
         h.actual_time_str = cols[7].get_text(strip=True) if len(cols) > 7 else ""
         h.actual_margin_str = cols[8].get_text(strip=True) if len(cols) > 8 else ""
         h.actual_popularity = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+        h.actual_odds = cols[10].get_text(strip=True) if len(cols) > 10 else ""
 
         horses.append(h)
 
@@ -658,16 +661,24 @@ def fetch_all_horses_nar_backtest(
     race_no: int,
     year: Optional[int] = None,
     past_limit: int = 3,
+    horse_cache: "dict | None" = None,
+    sleep_sec: float = 1.0,
 ) -> tuple[RaceInfo, list]:
     """
     レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
     各馬の過去走も取得する。
 
-    重要：このレース自体が対象馬の「最新の過去走」としてfetch_past_racesに
-    含まれてしまうため、target_dateと同じ日付の過去走は除外してから
-    calc_phase1_narに渡すこと（データリーク防止）。
-    このため本関数はpast_limit+1件多めに取得し、対象レース当日の記録を
-    自動的にフィルタして返す。
+    v1.1（JRA側scraper.py v1.8と合わせて改修）：任意の過去日付を正しく
+    検証できるよう改修。以前は「同じ日付の過去走だけ除外」という設計だった
+    ため、対象レースより後（未来）に走ったレースが過去走に混入するデータ
+    リークがあった（直近1走しか正しく検証できない制約の原因だった）。
+    今回からfetch_past_races(horse_id, limit=None)で生涯全走を取得し、
+    filter_past_races_before()で「対象レースの日付より前」だけに絞り込む
+    ため、何ヶ月・何年前のレースでも正しく検証できる。
+
+    horse_cache : {horse_id: 生涯全走list[PastRace]} の辞書を渡すと、
+        同じ馬について複数レースをまたいで再取得しない
+        （batch_backtest.pyのような一括処理向け）。
     """
     race_id = build_nar_race_id(venue, race_date, race_no, year=year)
     race_info, horses = fetch_race_result_nar(race_id)
@@ -677,18 +688,25 @@ def fetch_all_horses_nar_backtest(
     else:
         target_date_str = None   # 文字列指定の場合は日付フィルタ不可（要手動確認）
 
-    import time
     for horse in horses:
-        if horse.horse_id:
-            try:
-                raw_past = fetch_past_races(horse.horse_id, limit=past_limit + 3)
-                if target_date_str:
-                    raw_past = [pr for pr in raw_past if pr.date != target_date_str]
-                horse.past_races = raw_past[:past_limit]
-            except Exception as e:
-                horse.past_races = []
-                print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
-            time.sleep(1.0)
+        if not horse.horse_id:
+            continue
+        try:
+            if horse_cache is not None and horse.horse_id in horse_cache:
+                full_history = horse_cache[horse.horse_id]
+            else:
+                full_history = fetch_past_races(horse.horse_id, limit=None)
+                if horse_cache is not None:
+                    horse_cache[horse.horse_id] = full_history
+                time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
+
+            if target_date_str:
+                horse.past_races = filter_past_races_before(full_history, target_date_str)[:past_limit]
+            else:
+                horse.past_races = full_history[:past_limit]
+        except Exception as e:
+            horse.past_races = []
+            print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
 
     return race_info, horses
 
@@ -720,3 +738,38 @@ def fetch_all_horses_nar(
             time.sleep(1.0)
 
     return race_info, horses
+
+
+# ──────────────────────────────────────────────
+# 開催日程の列挙（v1.1追加：日付範囲バッチ処理用）
+# ──────────────────────────────────────────────
+
+def fetch_nar_race_ids_for_date(
+    venue: str,
+    race_date: "datetime.date | str",
+    year: Optional[int] = None,
+    max_race_no: int = 12,
+) -> list[str]:
+    """
+    指定の競馬場・日付について、開催されうるレース番号ぶんのrace_idを
+    機械的に組み立てて返す（v1.1追加）。
+
+    NARのrace_idは「年+競馬場コード+月日+レース番号」という構成で、
+    日付から直接計算できる（JRAのように開催回・開催日次を事前に知る
+    必要がない）。そのためJRA側のfetch_jra_race_ids_for_dateのように
+    スケジュールページを解析する必要はなく、1R〜max_race_no（通常12）まで
+    総当たりでIDを組み立てるだけでよい。
+
+    ★実際にその日・その場でレースが開催されたかどうかはここでは判定しない
+    （開催がない場合はfetch_race_result_nar側が空データ・エラーになる）。
+    呼び出し側（batch_backtest.py）で、取得失敗・0頭立てのレースは
+    スキップすること。
+    """
+    race_ids = []
+    for race_no in range(1, max_race_no + 1):
+        try:
+            rid = build_nar_race_id(venue, race_date, race_no, year=year)
+        except ValueError:
+            continue
+        race_ids.append(rid)
+    return race_ids

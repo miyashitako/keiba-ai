@@ -39,6 +39,7 @@ from scraper_nar import (
     fetch_all_horses_nar_backtest,
     build_nar_race_id,
 )
+from results_logger import log_backtest_results
 
 
 st.set_page_config(
@@ -267,6 +268,21 @@ if st.session_state.nar_race_info is not None:
         col_x.metric("予想上位3頭", str(top3_pred))
         col_y.metric("実際の上位3頭", str(top3_actual))
         col_z.metric("重複数", f"{hit_count}/3")
+
+        # ── Google Sheetsへの記録（v0.3追加）────────────────
+        if st.button("📝 この結果をGoogle Sheetsに記録", key="nar_log_to_sheets_btn"):
+            with st.spinner("Google Sheetsに記録中..."):
+                ok, msg = log_backtest_results(
+                    system="NAR",
+                    race_info=race_info,
+                    horses=horses,
+                    display_results=display_results,
+                    phase5_applied=st.session_state.nar_phase5_applied,
+                )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     with st.expander("各馬の詳細note（大差負け・近走不振・地区転入等の内訳）"):
         for r in display_results:
