@@ -37,7 +37,26 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.7-momentum_bonus_and_phase2_2run_threshold"
+__version__ = "2.8-recalibration_v1_conservative_half_step"
+
+# ── v2.8 再キャリブレーション反映（2026/8/28）─────────────────────
+# recalibrate.py（NARデータ約1100レース・約10,900頭、2026/7/24〜8/24）による
+# ConditionalLogit分析の結果を、以下の各定数に反映した。
+#
+# 方針（ユーザー確認済み）：
+# - implied値をそのまま反映せず、まず半分程度だけ動かす（現行値とimplied値の
+#   中間）。データを追加収集後にrecalibrate.pyを再実行し、残差係数が0に
+#   近づいているか確認しながら漸進的に調整する。
+# - 距離好走ボーナス（DIST_GOOD_FINISH_BONUS）はcalculator.py（JRA用）と
+#   共有の定数だが、今回の分析はNARデータのみに基づくため、JRA側の挙動に
+#   影響を与えないようcalculator.py側は変更せず、NAR専用の値
+#   （NAR_DIST_GOOD_FINISH_BONUS）をcalc_distance_aptitude_bonus()の
+#   bonus_table引数として渡す方式にした（v1.3でJRA側に追加した後方互換
+#   引数。bonus_table省略時はJRA側は従来通りDIST_GOOD_FINISH_BONUSを使う
+#   ため、JRA側の挙動は完全に不変）。
+# - 格B・昇級(僅差勝ち)は非有意だったため変更なし。
+# - NAR版・馬齢限定戦トグル、システム予想vs実際の人気の直接比較検証は
+#   別途保留中（引き継ぎプロンプト参照）。
 
 # calculator.py の汎用ロジック・データクラスをそのまま再利用
 from calculator import (
@@ -149,8 +168,33 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 # 即通用するケースが非常に多い（特に秋に多く見られる、JRAを見切った馬の
 # 地方転入パターン）。中央⇔地方のレベル差は南関東⇔他地区の差よりも
 # さらに大きいと考えられるため、地区転入ボーナスより大きめの値を設定する。
-CENTRAL_TRANSFER_BONUS_PER_RACE = 2.5
-CENTRAL_TRANSFER_BONUS_MAX = 6.0
+#
+# v2.8：recalibrate.py（NARデータのみ）で、3走以上の馬にはimplied+7.72pt
+# （現行max+6.0pt）と過小評価が示された一方、有効走数2走以下の馬では
+# 逆にimplied-4.22pt相当（過大評価）と示されたため、低走数馬向けに
+# ボーナスを割り引く仕組みを追加した。半分反映の方針に基づき：
+#   - MAX: 6.0 → 6.9（implied 7.72との中間）、PER_RACEも同倍率で調整
+#   - 低走数馬（有効走数<=CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD）は、
+#     算出したボーナスからCENTRAL_TRANSFER_LOW_RUNS_DISCOUNTを差し引く
+#     （implied-4.22pt相当の半分＝-2.1pt。0未満にはならないようフロアあり）
+CENTRAL_TRANSFER_BONUS_PER_RACE = 2.9
+CENTRAL_TRANSFER_BONUS_MAX = 6.9
+CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 2.1
+
+# ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
+# NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
+# 2:0.9, 3:0.6}のまま変更なし）。
+# recalibrate.py（NARデータのみ）で implied 値：1着+4.52 / 2着+3.56 / 3着+2.91
+# （現行1.2/0.9/0.6は大幅な過小評価）と示されたため、半分反映の方針に基づき
+# 現行値とimplied値の中間に設定する。
+NAR_DIST_GOOD_FINISH_BONUS = {1: 2.9, 2: 2.2, 3: 1.8}
+# 距離好走1着については、有効走数が少ない馬でさらに強い効果（implied
+# 追加+1.89pt）が確認されたため、該当馬にのみ追加ボーナスを加える
+# （半分反映＝+0.9pt）。2着・3着については有意な低走数交互作用は
+# 確認されていないため対象外。
+NAR_DIST_LOW_RUNS_THRESHOLD = 2
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.9
 
 
 def get_region_nar(venue: str) -> str:
@@ -530,13 +574,17 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 #      次走であっさり持ち直すケースが多いというユーザーの経験則に基づき、
 #      直近走（最大3走）のうち「不振」該当がNAR_FORM_MIN_POOR_RACES走に
 #      満たない場合は発動しない。
+# v2.8：recalibrate.py（NARデータのみ）で「近走不振」タグ全体としての
+# implied値が-3.45pt相当（現行はCAP=2.0が上限）と、ペナルティが弱すぎる
+# 可能性が示された。半分反映の方針に基づき、各tierとCAPを同倍率
+# （約1.36倍＝現行2.0とimplied3.45の中間である2.7への倍率）で引き上げる。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
-    (1.5, 0.3),
-    (3.0, 0.6),
-    (999.0, 1.0),
+    (1.5, 0.4),
+    (3.0, 0.8),
+    (999.0, 1.4),
 ]
-NAR_FORM_PENALTY_CAP = 2.0      # 近走不振ペナルティ単体の上限
+NAR_FORM_PENALTY_CAP = 2.7      # 近走不振ペナルティ単体の上限（旧2.0）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 
 
@@ -579,7 +627,10 @@ def calc_momentum_bonus_nar(
     if curr_base < prev_base - 0.05:   # 昇級（組の格上げ含む）
         if prev.finish != 1:
             # 前走で勝っていない昇級（他馬の回避等の特殊ケース）→ ペナルティ
-            return -0.5, "昇級(前走非勝利)"
+            # v2.8：recalibrate.py（NARデータのみ）でimplied-1.42pt相当と、
+            # 現行-0.5ptは過小評価との結果。半分反映で-1.0ptに引き上げ
+            # （旧-0.5pt）。
+            return -1.0, "昇級(前走非勝利)"
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -907,13 +958,23 @@ def calc_phase1_nar(
             result.best_time    = round(result.best_time    - momentum_pt, 3)
             result.note = (result.note + f" [{momentum_label}:{momentum_pt:+.2f}]").strip()
 
-    # ── 距離適性ボーナス（calculator.pyの関数をそのまま流用）
+    # ── 距離適性ボーナス（calculator.pyの関数をそのまま流用。ただしv2.8で
+    #    NAR専用のNAR_DIST_GOOD_FINISH_BONUSをbonus_table引数で渡すように
+    #    変更。JRA側（calculator.py）の挙動には影響しない）
     if use_dist_aptitude and target_distance > 0:
         dist_bonus, dist_label = calc_distance_aptitude_bonus(
             past_races_all, target_distance,
             target_surface=target_surface,
             all_past_races=past_races_all,
+            bonus_table=NAR_DIST_GOOD_FINISH_BONUS,
         )
+        # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
+        # 追加の交互作用効果がrecalibrate.pyで確認されたため、該当馬には
+        # 追加ボーナスを加算する（半分反映）。
+        if (dist_label.startswith("距離好走1着")
+                and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):
+            dist_bonus = round(dist_bonus + NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST, 3)
+            dist_label = dist_label + "+低走数加算"
         result.phase1_score = round(result.phase1_score - dist_bonus, 3)
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)
         result.best_time    = round(result.best_time    - dist_bonus, 3)
@@ -938,10 +999,19 @@ def calc_phase1_nar(
                 jra_count * CENTRAL_TRANSFER_BONUS_PER_RACE,
                 CENTRAL_TRANSFER_BONUS_MAX,
             )
+            central_label_extra = ""
+            # v2.8：低走数馬ではrecalibrate.pyで過大評価（implied-4.22pt
+            # 相当）が示されたため、該当馬はボーナスを割り引く（半分反映。
+            # 0未満（ペナルティ化）にはしない＝フロア0）。
+            if result.valid_runs <= CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD:
+                before = central_bonus
+                central_bonus = max(0.0, central_bonus - CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT)
+                if central_bonus != before:
+                    central_label_extra = "・低走数割引"
             result.phase1_score = round(result.phase1_score - central_bonus, 3)
             result.ability_avg  = round(result.ability_avg  - central_bonus, 3)
             result.best_time    = round(result.best_time    - central_bonus, 3)
-            result.note = (result.note + f" [中央転入(JRA経験{jra_count}走):-{central_bonus:.1f}]").strip()
+            result.note = (result.note + f" [中央転入(JRA経験{jra_count}走{central_label_extra}):-{central_bonus:.1f}]").strip()
 
     return result
 

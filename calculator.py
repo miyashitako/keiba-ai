@@ -685,6 +685,10 @@ def calc_distance_aptitude_bonus(
     was_fallback: bool = False,   # 引数互換維持（内部では未使用）
     target_surface: str = "",     # 芝ダ違いペナルティ用（v1.0追加）
     all_past_races: list = None,  # 芝ダフィルター前の全走（芝ダ転向判定用・v1.2追加）
+    bonus_table: dict = None,     # v1.3追加：①②の基礎ボーナス値（DIST_GOOD_FINISH_BONUS
+                                   # 相当）を差し替え可能にする。Noneなら従来通り
+                                   # DIST_GOOD_FINISH_BONUSを使う（JRA側の挙動は不変）。
+                                   # NAR側が独自の再キャリブレーション値を渡すために追加。
 ) -> tuple[float, str]:
     """
     距離適性ボーナスを計算して返す（v1.0改訂）。
@@ -713,7 +717,8 @@ def calc_distance_aptitude_bonus(
     ]
     if near_good:
         best_pr = min(near_good, key=lambda pr: (pr.finish, abs(pr.distance - target_distance)))
-        base = DIST_GOOD_FINISH_BONUS.get(best_pr.finish, 0.0)
+        _table = bonus_table if bonus_table is not None else DIST_GOOD_FINISH_BONUS
+        base = _table.get(best_pr.finish, 0.0)
 
         dist_diff = abs(best_pr.distance - target_distance)
         # 距離近さ係数
