@@ -3,6 +3,9 @@
 Phase1〜Phase4 を固定数式で計算する
 """
 
+# バージョン識別用（お手元のファイルが最新か確認する用途）
+__version__ = "1.3-jra_recalibration_v1_conservative_half_step"
+
 from dataclasses import dataclass, field
 from typing import Optional
 import statistics
@@ -74,10 +77,16 @@ GRADE_RANK_SCALE = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4}
 # ── 近走不振ペナルティ（復活 v1.0）──────────────────────────────────
 # 着順ベースになったことでコアスコアに不振が反映されるが、
 # 「直近の勢い」は加重平均より明示的なペナルティで補強する。
+#
+# v1.3（2026/8/29）：recalibrate.py（JRAデータ、2026/4/25〜8/24・約1150
+# レース）で、現行の最大加算(+3.0)に対し必要な加算量はimplied+4.77pt相当
+# と、加算が弱すぎる可能性が示された（NARの近走不振と同じ方向）。
+# 半分反映の方針（現行値とimplied値の中間）に基づき、CAP相当を3.0→3.9
+# （倍率1.3）に引き上げ、各tierも同倍率でスケールした。
 RECENT_FORM_PENALTY = [
-    (8.0, 3.0),   # 加重平均着順 ≥ 8.0 → +3.0ポイント
-    (6.0, 1.5),   # ≥ 6.0 → +1.5
-    (4.5, 0.5),   # ≥ 4.5 → +0.5
+    (8.0, 3.9),   # 加重平均着順 ≥ 8.0 → +3.9ポイント（旧+3.0）
+    (6.0, 2.0),   # ≥ 6.0 → +2.0（旧+1.5）
+    (4.5, 0.7),   # ≥ 4.5 → +0.7（旧+0.5）
 ]
 
 # ── 着順ボーナス（スコアから引く、小さいほど良評価）────────────────
@@ -131,6 +140,17 @@ ONE_WIN_OR_LESS = {"新馬", "未勝利", "1勝クラス", "500万下"}
 
 # ── 距離適性ボーナステーブル（v0.7追加）──────────────────────────────
 DIST_GOOD_FINISH_BONUS = {1: 1.2, 2: 0.9, 3: 0.6}   # 旧0.08→着順スケールに合わせて拡大
+
+# v1.3（2026/8/29）：recalibrate.py（JRAデータ、2026/4/25〜8/24）で、
+# 距離好走1/2/3着ボーナスがいずれも大幅な過小評価（implied+4.61/+4.25/
+# +3.47pt）と判定された。NARの再キャリブレーション時と同じ理由で、
+# DIST_GOOD_FINISH_BONUSはNAR側（calculator_nar.py）でも共有される
+# デフォルト値のため、ここでは直接変更せず、JRA専用の値を
+# JRA_DIST_GOOD_FINISH_BONUSとして別途用意し、calc_phase1側で
+# calc_distance_aptitude_bonus()のbonus_table引数として渡す
+# （NAR側の挙動には一切影響しない）。半分反映（現行値とimplied値の
+# 中間）の方針に基づく。
+JRA_DIST_GOOD_FINISH_BONUS = {1: 2.9, 2: 2.6, 3: 2.0}
 
 DIST_BONUS_MARGIN_THRESHOLDS = [
     (0.3, 1.0),   # 0.3秒以下：フルボーナス
@@ -476,6 +496,12 @@ def calc_grade_bonus(
     past_races: list,
     age_limited: bool = False,
     classic_distance: bool = False,
+    grade_table: dict = None,   # v1.3追加：通常モード（age_limited=False）の
+                                 # GRADE_BONUS_TABLEを差し替え可能に。Noneなら
+                                 # 従来通りGRADE_BONUS_TABLEを使う（挙動不変）。
+                                 # 馬齢限定戦モード（AGE_LIMITED_BASE）は対象外
+                                 # （今回の再キャリブレーションは通常モードの
+                                 # 「格B」タグのデータに基づくため）。
 ) -> float:
     """
     全過去走から格戦ボーナスを集計して返す。
@@ -549,9 +575,10 @@ def calc_grade_bonus(
         grade_runs[gkey].append(pr.finish)
 
     total = 0.0
+    _table = grade_table if grade_table is not None else GRADE_BONUS_TABLE
     for gkey, finishes in grade_runs.items():
         finishes_sorted = sorted(finishes)  # 着順昇順（最良から）
-        base = GRADE_BONUS_TABLE.get(gkey, 0.0)
+        base = _table.get(gkey, 0.0)
         for i, rank in enumerate(finishes_sorted):
             decay = DECAY_RATES[i] if i < len(DECAY_RATES) else DECAY_RATES[-1]
             scale = GRADE_RANK_SCALE.get(rank, 0.4)
@@ -562,11 +589,12 @@ def calc_grade_bonus(
 def calc_momentum_bonus(
     past_races: list,
     current_class: str,
-) -> float:
+) -> tuple:
     """
-    昇級勢い指数（v1.1更新）。
+    昇級勢い指数（v1.2更新）。
     前走クラス < 今回クラス の場合に補正を返す。
-    戻り値は「スコアから引くポイント数」（正値=ボーナス、負値=ペナルティ）。
+    戻り値は (ボーナス値, ラベル) のタプル。ボーナス値は「スコアから引く
+    ポイント数」（正値=ボーナス、負値=ペナルティ）。該当なしなら(0.0, "")。
     格下げにはペナルティを付与しない（格上からの降格は力量上位のため）。
 
     v1.1追加：直近5走の通算勝利数による「勢い」判定。
@@ -581,12 +609,21 @@ def calc_momentum_bonus(
     直前2走が連続で勝利しているという狭い「連勝」判定ではなく、直近5走
     中の勝利数（間に格上挑戦の凡走を挟んでも良い）を見ることで、
     「通算で勝ち続けている強さ」をより広く拾えるようにする。
+
+    v1.2：戻り値を(float)から(float, str)のタプルに変更。従来は
+    "[昇降:+X.XXpt]"という汎用ラベルしか付与していなかったため、
+    calculator_nar.py（NAR側）のcalc_momentum_bonus_nar()と違い、
+    「昇級(前走非勝利)」「昇級(圧勝)」等の内訳別タグ検定・再キャリブレー
+    ション（analyze_predictions.py・recalibrate.pyの_TAG_PATTERNS）が
+    JRAデータでは効かない状態だった。NAR側と同じ内訳ラベルを付与する
+    ことで、JRA側でも同じ自己検証パイプラインが使えるようにする
+    （数値ロジック自体は変更なし。ラベルの粒度を揃えただけ）。
     """
     if not past_races:
-        return 0.0
+        return 0.0, ""
     prev = past_races[0]
     if prev.finish <= 0:
-        return 0.0
+        return 0.0, ""
 
     prev_order = _get_class_order(prev.race_class)
     curr_order = _get_class_order(current_class)
@@ -594,7 +631,10 @@ def calc_momentum_bonus(
     if curr_order > prev_order:          # 昇級
         if prev.finish != 1:
             # 前走で勝っていない昇級（特殊ケース）→ ペナルティ
-            return -0.5
+            # v1.3（2026/8/29）：recalibrate.py（JRAデータ）でimplied
+            # +1.82pt相当（現行+0.5pt=弱すぎる）と判定。半分反映で
+            # +1.2ptに引き上げ（旧+0.5pt）。
+            return -1.2, "昇級(前走非勝利)"
 
         # 直近5走の通算勝利数（連続でなくても可）による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -602,17 +642,17 @@ def calc_momentum_bonus(
         if win_count >= 3:
             # 通算で突出した強さ（間に凡走を挟んでいても）→ 僅差勝ちでも
             # ボーナス扱いに引き上げる（圧勝昇級と同格）
-            return 1.5
+            return 1.5, f"昇級勢い(通算{win_count}勝)"
 
         # 前走1着：margin = 2着馬との差（リード）で勝ち方を判定
         if prev.margin >= 0.5:
-            return  1.5   # 圧勝昇級 → ボーナス（スコアから引く）
+            return 1.5, "昇級(圧勝)"   # 圧勝昇級 → ボーナス（スコアから引く）
         elif prev.margin >= 0.2:
-            return  0.5   # 中間
+            return 0.5, "昇級(順当勝ち)"   # 中間
         else:
-            return -0.75  # 僅差勝ち昇級 → ペナルティ（スコアに加わる）
+            return -0.75, "昇級(僅差勝ち)"   # 僅差勝ち昇級 → ペナルティ
     # 格下げ・同クラスはペナルティなし
-    return 0.0
+    return 0.0, ""
 
 
 def calc_recent_form_penalty(
@@ -1589,11 +1629,11 @@ def calc_phase1(
     # ── 昇級勢い（障害レースはスキップ：未勝利とOPの2クラスのみで昇降概念が異なる）
     _is_hurdle_race = current_class and "障" in str(current_class)
     if use_momentum and current_class and not _is_hurdle_race:
-        momentum_pt = calc_momentum_bonus(past_races_all, current_class)
+        momentum_pt, momentum_label = calc_momentum_bonus(past_races_all, current_class)
         result.phase1_score = round(result.phase1_score - momentum_pt, 3)
         result.ability_avg  = round(result.ability_avg  - momentum_pt, 3)
         if momentum_pt != 0:
-            result.note = (result.note + f" [昇降:{momentum_pt:+.2f}pt]").strip()
+            result.note = (result.note + f" [{momentum_label}:{momentum_pt:+.2f}]").strip()
 
     # ── 距離適性ボーナス
     if use_dist_aptitude and target_distance > 0:
@@ -1601,6 +1641,7 @@ def calc_phase1(
             past_races_all, target_distance,
             target_surface=target_surface,
             all_past_races=_all_for_interval,  # 芝ダフィルター前の全走
+            bonus_table=JRA_DIST_GOOD_FINISH_BONUS,
         )
         result.phase1_score = round(result.phase1_score - dist_bonus, 3)
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)
