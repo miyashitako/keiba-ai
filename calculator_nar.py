@@ -37,7 +37,15 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.8-recalibration_v1_conservative_half_step"
+__version__ = "2.9-recalibration_v2_conservative_half_step"
+
+# ── v2.9 再キャリブレーション反映（2026/8/31・2巡目）─────────────
+# v2.8投入後に新規収集したNARデータ（2026/7/24〜8/24、calc_version=2.8で
+# 再収集）でrecalibrate.pyを再実行した結果、距離好走・近走不振・
+# 昇級(前走非勝利)・中央転入のいずれも「現行値とimplied値のギャップ」が
+# 縮小（15〜67%）していることを確認。半分反映のアプローチが正しい方向に
+# 効いていることが裏付けられたため、同じ考え方（現行値とimplied値の中間）
+# でもう一段階反映する。格B・昇級(僅差勝ち)は引き続き非有意のため変更なし。
 
 # ── v2.8 再キャリブレーション反映（2026/8/28）─────────────────────
 # recalibrate.py（NARデータ約1100レース・約10,900頭、2026/7/24〜8/24）による
@@ -177,10 +185,17 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 #   - 低走数馬（有効走数<=CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD）は、
 #     算出したボーナスからCENTRAL_TRANSFER_LOW_RUNS_DISCOUNTを差し引く
 #     （implied-4.22pt相当の半分＝-2.1pt。0未満にはならないようフロアあり）
-CENTRAL_TRANSFER_BONUS_PER_RACE = 2.9
-CENTRAL_TRANSFER_BONUS_MAX = 6.9
+#
+# v2.9（2巡目）：v2.8投入後の新データで再検証したところ、implied値は
+# +7.46pt（現行6.9pt）とギャップが縮小（1.72→0.56pt）していたため、
+# 半分反映の方針を継続してMAX/PER_RACEをさらに引き上げる。
+# ただしこの再検証は--interact-low-runsを付けずに実行したため、低走数
+# 馬との交互作用（CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT）は今回未検証。
+# 次回は--interact-low-runs 2を付けて再検証してから、この値も見直すこと。
+CENTRAL_TRANSFER_BONUS_PER_RACE = 3.0
+CENTRAL_TRANSFER_BONUS_MAX = 7.2
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
-CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 2.1
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 2.1  # v2.9では未検証・変更なし（上記コメント参照）
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -188,11 +203,17 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 2.1
 # recalibrate.py（NARデータのみ）で implied 値：1着+4.52 / 2着+3.56 / 3着+2.91
 # （現行1.2/0.9/0.6は大幅な過小評価）と示されたため、半分反映の方針に基づき
 # 現行値とimplied値の中間に設定する。
-NAR_DIST_GOOD_FINISH_BONUS = {1: 2.9, 2: 2.2, 3: 1.8}
+#
+# v2.9（2巡目）：v2.8投入後の新データでimplied値は+5.73/+4.45/+3.60pt
+# （現行2.9/2.2/1.8）と、ギャップが縮小（15〜22%）していたため、
+# 同じ考え方でもう一段階引き上げる。
+NAR_DIST_GOOD_FINISH_BONUS = {1: 4.3, 2: 3.3, 3: 2.7}
 # 距離好走1着については、有効走数が少ない馬でさらに強い効果（implied
 # 追加+1.89pt）が確認されたため、該当馬にのみ追加ボーナスを加える
 # （半分反映＝+0.9pt）。2着・3着については有意な低走数交互作用は
 # 確認されていないため対象外。
+# v2.9：この交互作用項もv2.8以降未検証（--interact-low-runsを付けての
+# 再検証待ち）のため、値は据え置き。
 NAR_DIST_LOW_RUNS_THRESHOLD = 2
 NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.9
 
@@ -578,13 +599,18 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 # implied値が-3.45pt相当（現行はCAP=2.0が上限）と、ペナルティが弱すぎる
 # 可能性が示された。半分反映の方針に基づき、各tierとCAPを同倍率
 # （約1.36倍＝現行2.0とimplied3.45の中間である2.7への倍率）で引き上げる。
+#
+# v2.9（2巡目）：v2.8投入後の新データで必要な加算量はimplied+3.62pt
+# （現行2.7pt）と、ギャップが縮小（1.45→0.92pt、37%減）していたため、
+# 同じ考え方でCAPを2.7→3.2（倍率1.185）に引き上げ、各tierも同倍率で
+# スケールする。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
-    (1.5, 0.4),
-    (3.0, 0.8),
-    (999.0, 1.4),
+    (1.5, 0.5),
+    (3.0, 0.9),
+    (999.0, 1.7),
 ]
-NAR_FORM_PENALTY_CAP = 2.7      # 近走不振ペナルティ単体の上限（旧2.0）
+NAR_FORM_PENALTY_CAP = 3.2      # 近走不振ペナルティ単体の上限（旧2.7）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 
 
@@ -630,7 +656,10 @@ def calc_momentum_bonus_nar(
             # v2.8：recalibrate.py（NARデータのみ）でimplied-1.42pt相当と、
             # 現行-0.5ptは過小評価との結果。半分反映で-1.0ptに引き上げ
             # （旧-0.5pt）。
-            return -1.0, "昇級(前走非勝利)"
+            # v2.9（2巡目）：v2.8投入後の新データで必要な加算量はimplied
+            # +1.48pt（現行1.0pt）と、ギャップが縮小（0.92→0.48pt、48%減）
+            # していたため、同じ考え方で-1.2ptに引き上げ（旧-1.0pt）。
+            return -1.2, "昇級(前走非勝利)"
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
