@@ -37,7 +37,26 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.2-recalibration_v5_overshoot_correction"
+__version__ = "3.3-recalibration_v6_large_combined_sample"
+
+# ── v3.3 再キャリブレーション反映（2026/9/4・6巡目・過去最大サンプル）──
+# キャッシュ済み全期間（4/24〜8/24、約3521レース・36,026頭）を合算した、
+# これまでで最大のサンプルで再検証。大サンプルで得られた推定値を最も
+# 信頼できるものとして扱い、これまで「複数の小さい検証期間で方向が
+# 矛盾していたため保留」にしていたタグ（距離好走2着・昇級(前走非勝利)）
+# も含めて整理し直す：
+#   - 距離好走1着・近走不振・中央転入：引き続き有意・同方向 → 増額継続
+#   - 距離好走2着：implied値が現行値とほぼ一致（ギャップ解消）→ 凍結解除・
+#     小幅増額
+#   - 距離好走3着：3回目の検証でも現行値の方がimpliedより高い → さらに減額
+#   - 昇級(前走非勝利)：大サンプルで明確に有意・ギャップも大きい → 凍結解除・
+#     増額
+#   - 距離好走3着×低走数：3回連続で有意 → 追加ボーナスをさらに増額
+#   - 昇級(前走非勝利)×低走数・距離好走2着×低走数：新たに有意 → 新規実装
+#   - 近走不振×低走数：新たに有意だが階層式ペナルティへの組み込みが複雑
+#     なため、今回は実装を見送り要検討事項としてメモ
+#   - 格B：引き続き有意（implied+4.17pt）だが、個別グレードへの分解が
+#     済んでいないため引き続き未対応
 
 # ── v3.2 再キャリブレーション反映（2026/9/3・5巡目・別の未使用期間での検証）──
 # 4/24〜6/23（これも未使用期間）で再検証した結果：
@@ -234,22 +253,20 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 # 引き上げ、DISCOUNTも低走数側の実効値をimplied(4.63)に近づける方向で
 # 調整する（新MAX-新DISCOUNT ≈ 4.63になるよう半分反映で計算）。
 #
-# v3.1（4巡目・未使用期間6/24〜7/23での検証）：3走以上側は新データでも
-# implied+10.77pt相当と有意に高いまま（現行8.7pt、ギャップ2.07pt）で、
-# 過剰適合ではなく本物の効果と確認できた。低走数側の実効値はimplied
-# +4.87pt相当・現行実効5.6pt（8.7-3.1）とわずかに現行が高い程度で、
-# 引き続きほぼ適正。半分反映の方針で、MAX/PER_RACEをさらに引き上げつつ、
-# DISCOUNTも実効値をimplied寄りにわずかに調整する。
-#
 # v3.2（5巡目・別の未使用期間4/24〜6/23での検証）：3走以上側は今回も
 # implied+11.97pt相当と有意に高いまま（現行9.7pt、ギャップ2.27pt）で、
 # 2期間連続で本物の効果と確認できた。低走数側の実効値もimplied+5.44pt相当
 # ・現行実効5.2pt（9.7-4.5）とほぼ一致し続けている。半分反映の方針で
 # MAX/PER_RACEをさらに引き上げ、DISCOUNTも実効値をimplied寄りに微調整する。
-CENTRAL_TRANSFER_BONUS_PER_RACE = 4.5
-CENTRAL_TRANSFER_BONUS_MAX = 10.8
+#
+# v3.3（6巡目・4/24〜8/24合算の過去最大サンプル）：3走以上側は今回も
+# implied+12.12pt相当と有意に高いまま（現行10.8pt、ギャップ1.32pt）で、
+# 引き続き半分反映を継続。低走数側の実効値もimplied+5.40pt相当・現行実効
+# 5.3pt（10.8-5.5）とほぼ一致し続けている（ギャップ0.10pt、ほぼ収束）。
+CENTRAL_TRANSFER_BONUS_PER_RACE = 4.8
+CENTRAL_TRANSFER_BONUS_MAX = 11.5
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
-CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 5.5
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 6.2
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -284,7 +301,15 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 5.5
 #     （非有意、implied+1.88pt）と合わせて2回連続で「現行値の方が高い」
 #     という結果になったため、初めて減額に転じる（半分反映＝現行値と
 #     2回の実測値の平均implied(約2.07pt)の中間）。
-NAR_DIST_GOOD_FINISH_BONUS = {1: 6.7, 2: 5.1, 3: 2.7}
+#
+# v3.3（6巡目・4/24〜8/24合算の過去最大サンプル）：
+#   - 1着：引き続き有意（implied+7.44pt、現行6.7pt）→ 半分反映を継続
+#   - 2着：implied(+5.27pt)が現行(5.1pt)とほぼ一致（ギャップ0.17pt）＝
+#     保留にしていた矛盾が解消し、ほぼ収束していたと判明。凍結解除の
+#     うえ小幅増額。
+#   - 3着：3回目の検証でもimplied(+2.29pt)が現行(2.7pt)を下回り続けた
+#     ため、さらに減額する。
+NAR_DIST_GOOD_FINISH_BONUS = {1: 7.1, 2: 5.2, 3: 2.5}
 # 距離好走1着については、有効走数が少ない馬でさらに強い効果（implied
 # 追加+1.89pt）が確認されたため、該当馬にのみ追加ボーナスを加える
 # （半分反映＝+0.9pt）。2着・3着については有意な低走数交互作用は
@@ -303,11 +328,26 @@ NAR_DIST_GOOD_FINISH_BONUS = {1: 6.7, 2: 5.1, 3: 2.7}
 # 再び有意（+3.61pt相当）となり、2期間連続で再現したため実在の効果と
 # 判断。新たにNAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RDとして実装する
 # （半分反映＝2回のimplied平均(4.81pt)の半分≈2.4pt）。
+#
+# v3.3（6巡目）：4/24〜8/24合算の過去最大サンプルでも「距離好走3着×
+# 低走数」が3回連続で有意（implied+4.61pt、現行2.4pt）→ さらに増額。
+# 一方「距離好走1着×低走数」（EXTRA_1ST）は今回implied+1.10ptとなり
+# 非有意（p=0.173）。round3では有意だったが、round4・round5・今回と
+# 3回連続で非有意という結果が続いている。implied値自体は現行(0.9)と
+# 近いため、無理に変更せず据え置くが、この交互作用の実在性は今後も
+# 注視する。
 NAR_DIST_LOW_RUNS_THRESHOLD = 2
 NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.9
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 2.4
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 3.5
+# v3.3新規実装：距離好走2着×低走数も今回有意（implied+2.14pt）となった
+# ため、半分反映（+1.1pt）で新規実装する。
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 1.1
 
-
+# v3.3新規実装：昇級(前走非勝利)×低走数の交互作用が今回有意
+# （implied+1.62pt）となったため、半分反映（+0.8pt）で新規実装する。
+# 低走数閾値はNAR_DIST_LOW_RUNS_THRESHOLDと共通のNAR_FORM系の枠組みでは
+# なく、こちらも同じ「有効走数<=2」の定義を流用する。
+NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 0.8
 def get_region_nar(venue: str) -> str:
     """競馬場名から地区グループ名を返す。未登録の場は単独グループ（場名そのもの）として扱う。"""
     return NAR_REGION_GROUPS.get(venue, venue)
@@ -707,13 +747,21 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 # v3.2（5巡目・別の未使用期間4/24〜6/23での検証）：今回もimplied+5.02pt
 # （現行4.0pt、ギャップ1.02pt）と2期間連続で有意・同方向のため、
 # 同じ考え方でCAPを4.0→4.5（倍率1.125）に引き上げる。
+#
+# v3.3（6巡目・4/24〜8/24合算の過去最大サンプル）：今回もimplied+5.05pt
+# （現行4.5pt、ギャップ0.55pt）と有意・同方向で、ギャップも縮小してきた
+# ため、同じ考え方でCAPを4.5→4.8（倍率1.067）に引き上げる。
+# なお今回「近走不振×低走数」の交互作用も新たに有意（implied+2.32pt）
+# となったが、この関数は階層式（着差ベースの複数tier合算）のため、
+# 単純な加算1本では組み込みにくい。実装は見送り、次回以降の再現性を
+# 確認してから改めて設計を検討する（TODO）。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
-    (1.5, 0.8),
-    (3.0, 1.2),
-    (999.0, 2.4),
+    (1.5, 0.9),
+    (3.0, 1.3),
+    (999.0, 2.6),
 ]
-NAR_FORM_PENALTY_CAP = 4.5      # 近走不振ペナルティ単体の上限（旧4.0）
+NAR_FORM_PENALTY_CAP = 4.8      # 近走不振ペナルティ単体の上限（旧4.5）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 
 
@@ -777,7 +825,12 @@ def calc_momentum_bonus_nar(
             # しており、期間ごとのサンプルノイズの影響が大きいとみられる
             # ため、増減どちらも見送り現状維持（-1.4pt）。より大きな
             # サンプル（複数期間合算）での再検証を待つ。
-            return -1.4, "昇級(前走非勝利)"
+            # v3.3（6巡目・4/24〜8/24合算の過去最大サンプル）：矛盾していた
+            # 2期間を合算した大サンプルで再検証したところ、明確に有意
+            # （implied+2.28pt、現行1.4pt、ギャップ0.88pt）となり、
+            # サンプルサイズ不足によるブレだったと判明。凍結解除のうえ
+            # 半分反映で-1.8ptに引き上げる（旧-1.4pt）。
+            return -1.8, "昇級(前走非勝利)"
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -1099,6 +1152,12 @@ def calc_phase1_nar(
     # ── 昇級勢い（v2.7追加。get_class_base_nar()の「組」補正込みで判定）
     if use_momentum and current_class:
         momentum_pt, momentum_label = calc_momentum_bonus_nar(past_races_all, current_class)
+        # v3.3：昇級(前走非勝利)×低走数の交互作用が有意と確認できたため、
+        # 該当馬には追加ペナルティを加算する（半分反映）。
+        if (momentum_label == "昇級(前走非勝利)"
+                and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):
+            momentum_pt -= NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY   # ペナルティ強化＝スコアに加算する方向
+            momentum_label = momentum_label + "+低走数加算"
         if momentum_pt != 0:
             result.phase1_score = round(result.phase1_score - momentum_pt, 3)
             result.ability_avg  = round(result.ability_avg  - momentum_pt, 3)
@@ -1120,9 +1179,14 @@ def calc_phase1_nar(
         # 追加ボーナスを加算する（半分反映）。
         # v3.2：距離好走3着×低走数も2期間連続（6/24-7/23, 4/24-6/23）で
         # 有意と確認できたため、同様に追加ボーナスを加算する。
+        # v3.3：距離好走2着×低走数も有意となったため、同様に追加する。
         if (dist_label.startswith("距離好走1着")
                 and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):
             dist_bonus = round(dist_bonus + NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST, 3)
+            dist_label = dist_label + "+低走数加算"
+        elif (dist_label.startswith("距離好走2着")
+                and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):
+            dist_bonus = round(dist_bonus + NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND, 3)
             dist_label = dist_label + "+低走数加算"
         elif (dist_label.startswith("距離好走3着")
                 and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):

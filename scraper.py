@@ -4,6 +4,9 @@ netkeiba スクレイピングモジュール
 過去走：db.netkeiba.com/horse/result/{horse_id}/
 """
 
+# バージョン識別用（お手元のファイルが最新か確認する用途）
+__version__ = "2.0-jra_race_list_rate_limit_fix"
+
 import requests
 import datetime
 from bs4 import BeautifulSoup
@@ -881,6 +884,7 @@ def fetch_all_horses_backtest(
     past_limit: int = 5,
     horse_cache: "dict | None" = None,
     sleep_sec: float = 1.0,
+    use_cache: bool = True,
 ) -> tuple[RaceInfo, list[Horse]]:
     """
     レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
@@ -903,6 +907,15 @@ def fetch_all_horses_backtest(
         URLでも、12桁のrace_id文字列を直接渡してもどちらでもよい
         （v1.8追加：batch_backtest.pyはfetch_jra_race_ids_for_dateで
         得た素のrace_idをそのまま渡す）。
+
+    use_cache : v2.0追加。Trueならローカルディスクキャッシュ
+        （local_cache.py）を使う。同じ期間を何度も再検証する再キャリブレー
+        ションのサイクルで、netkeibaへの再アクセス（1回あたり数時間）を
+        省略できる。レース結果は確定後変化しない前提で無期限キャッシュ、
+        馬の過去走は「キャッシュ取得日 >= 対象レース日」の場合のみ有効
+        （それより後の対象日を検証する場合は自動的に再取得される）。
+        Falseにすると従来通り常にネットワークから取得する（キャッシュの
+        内容に疑いがある場合や、最新データを強制的に取り直したい場合用）。
     """
     if re.fullmatch(r"\d{8,}", race_url.strip()):
         race_id = race_url.strip()
@@ -911,7 +924,19 @@ def fetch_all_horses_backtest(
     if not race_id:
         raise ValueError(f"race_id をURLから取得できませんでした: {race_url}")
 
-    race_info, horses = fetch_race_result(race_id)
+    race_info = None
+    horses = None
+    if use_cache:
+        import local_cache
+        cached = local_cache.get_race_result(race_id)
+        if cached is not None:
+            race_info, horses = cached
+
+    if race_info is None:
+        race_info, horses = fetch_race_result(race_id)
+        if use_cache:
+            import local_cache
+            local_cache.set_race_result(race_id, race_info, horses)
 
     # race_infoのrace_date（例："2026年8月14日"）を
     # fetch_past_races側の日付表記（例："2026/08/14"）に変換してフィルタに使う
@@ -927,10 +952,20 @@ def fetch_all_horses_backtest(
             if horse_cache is not None and horse.horse_id in horse_cache:
                 full_history = horse_cache[horse.horse_id]
             else:
-                full_history = fetch_past_races(horse.horse_id, limit=None)
+                full_history = None
+                if use_cache:
+                    import local_cache
+                    full_history = local_cache.get_horse_past_races(
+                        horse.horse_id, min_valid_date=target_date_str
+                    )
+                if full_history is None:
+                    full_history = fetch_past_races(horse.horse_id, limit=None)
+                    if use_cache:
+                        import local_cache
+                        local_cache.set_horse_past_races(horse.horse_id, full_history)
+                    time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
                 if horse_cache is not None:
                     horse_cache[horse.horse_id] = full_history
-                time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
 
             if target_date_str:
                 horse.past_races = filter_past_races_before(full_history, target_date_str)[:past_limit]
@@ -947,35 +982,116 @@ def fetch_all_horses_backtest(
 # 開催日程の列挙（v1.8追加：日付範囲バッチ処理用）
 # ──────────────────────────────────────────────
 
-def fetch_jra_race_ids_for_date(date) -> list[str]:
+def fetch_jra_race_ids_for_date(date, debug: bool = True, max_retries: int = 3) -> list[str]:
     """
     指定日にJRAで開催された全レースのrace_idを取得する。
-    race.netkeiba.com/top/race_list.html?kaisai_date=YYYYMMDD を利用。
+    db.netkeiba.com/race/list/YYYYMMDD/ を利用（v1.9修正）。
 
     JRAのrace_idは「年+競馬場コード+開催回+開催日次+レース番号」という
     構成で、開催回・開催日次は事前に分からないと機械的に組み立てられない
     （NARのように日付から直接計算できない）。そのため、この関数で
     まず当日の開催スケジュールページからrace_idを丸ごと抽出する。
 
+    v1.9：当初はrace.netkeiba.com/top/race_list.html?kaisai_date=...を
+    使っていたが、本番実行で「土日を含む10日連続で開催なし」という
+    明らかにおかしい結果が出て調査した結果、このページは「本日の開催」
+    をタブ切り替えで見せるためのJSウィジェットで、実際のレース一覧は
+    ページ読み込み後にAjaxで取得される作りだったことが判明した
+    （静的HTMLの中には`var ary_race_id = [];`という空配列の宣言と
+    `onLoadTab()`というAjax呼び出し用の関数定義しか含まれておらず、
+    `requests.get()`による静的取得ではデータ本体が一切取れない）。
+    本ファイルの他の関数（fetch_past_races等）が既に問題なく使えている
+    db.netkeiba.com（Ajax不要の静的ページ）側の日付別レース一覧
+    （db.netkeiba.com/race/list/YYYYMMDD/）に切り替えた。このページは
+    レースへのリンクがpath形式（/race/(12桁race_id)/）で埋め込まれている
+    想定のため、抽出パターンもpath形式に変更している。
+
+    v2.0：8ヶ月分の一括実行で、ある日付以降すべてステータス400が返る
+    という症状が発生した（原因はbatch_backtest.py側の日付ループに
+    sleepが無く、開催が無い平日が連続する期間で間隔なしの連続リクエスト
+    になっていたことによるレート制限・ブロックの可能性が高い。
+    batch_backtest.py側は修正済み）。ここでは万一まだブロックが残って
+    いても自動で回復できるよう、200以外のステータスコードに対して
+    指数バックオフ付きの再試行を追加した（max_retries回、2秒→4秒→8秒
+    と間隔を広げる）。全て失敗した場合のみ空リストを返す（＝「開催
+    なし」と区別がつかない状態で終わる点は変わらないため、再試行後も
+    失敗した日は目視確認を推奨）。
+
     ★このサンドボックス環境からはnetkeibaへネットワーク到達できないため、
-    実際のページ構造は未検証。href属性から race_id=(12桁数字) という
-    パターンを正規表現で総当たり抽出する設計にしているため、多少ページの
-    HTML構造が想定と違っても取得できる可能性は高いが、初回使用時は必ず
-    件数（1日あたり多くても36レース程度）が妥当か目視確認すること。
+    実際のページ構造は未検証。db.netkeiba.com/race/list/の実際のHTML構造が
+    想定と違う場合に備え、path形式（/race/(\\d{12})/）に加えて、念のため
+    従来のquery形式（race_id=(\\d{12})）でも抽出を試みるフォールバックを
+    残している。初回使用時は必ず件数（1日あたり多くても36レース程度）が
+    妥当か目視確認すること。
     """
     if isinstance(date, datetime.date):
         date_str = f"{date.year:04d}{date.month:02d}{date.day:02d}"
     else:
         date_str = str(date).replace("-", "").replace("/", "")
 
-    url = f"https://race.netkeiba.com/top/race_list.html?kaisai_date={date_str}"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=15)
-    except Exception as e:
-        raise ConnectionError(f"開催日程の取得に失敗しました（{date_str}）: {e}")
+    url = f"https://db.netkeiba.com/race/list/{date_str}/"
+    res = None
+    for attempt in range(max_retries + 1):
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=15)
+        except Exception as e:
+            if attempt < max_retries:
+                wait = 2 ** (attempt + 1)
+                if debug:
+                    print(f"    [DEBUG {date_str}] リクエスト例外（{e}）。"
+                          f"{wait}秒後に再試行します（{attempt + 1}/{max_retries}）")
+                time.sleep(wait)
+                continue
+            raise ConnectionError(f"開催日程の取得に失敗しました（{date_str}）: {e}")
+
+        if res.status_code == 200:
+            break
+        if attempt < max_retries:
+            wait = 2 ** (attempt + 1)
+            if debug:
+                print(f"    [DEBUG {date_str}] ステータス={res.status_code}。"
+                      f"{wait}秒後に再試行します（{attempt + 1}/{max_retries}）")
+            time.sleep(wait)
+
+    if debug:
+        print(f"    [DEBUG {date_str}] リクエストURL={url} / 最終到達URL={res.url} / "
+              f"ステータス={res.status_code}")
+
     if res.status_code != 200:
+        if debug:
+            print(f"    [DEBUG {date_str}] ステータスコード={res.status_code}"
+                  f"（{max_retries}回再試行しても200にならず。ブロック・"
+                  f"リダイレクト・URL間違いの可能性）")
         return []
 
-    html_text = res.content.decode("utf-8", errors="replace")
-    race_ids = sorted(set(re.findall(r"race_id=(\d{12})", html_text)))
+    # db.netkeiba.comはEUC-JP（fetch_past_races関数と同じ、このドメイン共通の規約）。
+    # 従来utf-8決め打ちにしていたためデバッグ表示のtitleが文字化けしていた
+    # （データ抽出自体はrace_id等が半角英数字のため実害はなかったが、
+    # 目視確認しやすいよう修正）。
+    html_text = res.content.decode("euc-jp", errors="replace")
+
+    if debug:
+        title_m = re.search(r"<title>(.*?)</title>", html_text, re.DOTALL)
+        title = title_m.group(1).strip() if title_m else "(titleタグ見つからず)"
+        print(f"    [DEBUG {date_str}] 本文長={len(html_text)}文字 / <title>={title}")
+
+    race_ids = sorted(set(re.findall(r"/race/(\d{12})/", html_text)))
+    if not race_ids:
+        # フォールバック：念のため従来のquery形式でも試す
+        race_ids = sorted(set(re.findall(r"race_id=(\d{12})", html_text)))
+
+    if debug and not race_ids:
+        if "race_id" not in html_text and "/race/" not in html_text:
+            print(f"    [DEBUG {date_str}] 本文中に'race_id'・'/race/'という文字列が"
+                  f"一切見つからない。開催がない日である可能性、またはページ構造が"
+                  f"別物である可能性。")
+        else:
+            m = re.search(r".{60}(race_id|/race/).{60}", html_text, re.DOTALL)
+            sample = m.group(0) if m else "(前後抽出失敗)"
+            sample = sample.replace("\n", "\\n").replace("\t", "\\t")
+            print(f"    [DEBUG {date_str}] 本文中に'race_id'または'/race/'という文字列は"
+                  f"見つかったが、想定パターンにはマッチしなかった。"
+                  f"実際のリンク形式が想定と違う可能性が高い。周辺の実例：\n"
+                  f"      ...{sample}...")
+
     return race_ids
