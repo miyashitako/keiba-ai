@@ -37,7 +37,20 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.3-recalibration_v6_large_combined_sample"
+__version__ = "3.4-recalibration_v7_penalty_cap_bugfix"
+
+# ── v3.4 再キャリブレーション反映（2026/9/5・7巡目）─────────────────
+# 重大バグ修正：近走不振ペナルティの適用箇所に、NAR_FORM_PENALTY_CAPとは
+# 別のハードコードされた合算上限（3.0固定）が残っており、v2.9で
+# NAR_FORM_PENALTY_CAPが3.0を超えて以降、増額分が実質無効化されていた
+# （詳細はcalc_phase1_nar内のコメント参照）。NAR_COMBINED_PENALTY_CAPとして
+# NAR_FORM_PENALTY_CAPに連動する形に修正。
+#
+# 同じ--calc-version（v3.3）で再検証した結果、距離好走1・2着・近走不振・
+# 昇級(前走非勝利)・中央転入は引き続き有意・同方向で半分反映を継続。
+# 距離好走3着はimplied値が現行値とほぼ一致（差0.10pt）＝4回連続で
+# 「現行値の方が高い」系の結果が続いていたが、ここでようやく収束と判断し
+# 凍結。近走不振×低走数の交互作用が2期間連続で有意となったため新規実装。
 
 # ── v3.3 再キャリブレーション反映（2026/9/4・6巡目・過去最大サンプル）──
 # キャッシュ済み全期間（4/24〜8/24、約3521レース・36,026頭）を合算した、
@@ -263,10 +276,15 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 # implied+12.12pt相当と有意に高いまま（現行10.8pt、ギャップ1.32pt）で、
 # 引き続き半分反映を継続。低走数側の実効値もimplied+5.40pt相当・現行実効
 # 5.3pt（10.8-5.5）とほぼ一致し続けている（ギャップ0.10pt、ほぼ収束）。
-CENTRAL_TRANSFER_BONUS_PER_RACE = 4.8
-CENTRAL_TRANSFER_BONUS_MAX = 11.5
+#
+# v3.4（7巡目・同一--calc-versionでの再検証）：3走以上側は今回も
+# implied+12.70pt相当と有意に高いまま（現行11.5pt、ギャップ1.20pt）で、
+# 引き続き半分反映を継続。低走数側の実効値もimplied+5.66pt相当・現行実効
+# 5.3pt（11.5-6.2）とほぼ一致し続けている。
+CENTRAL_TRANSFER_BONUS_PER_RACE = 5.0
+CENTRAL_TRANSFER_BONUS_MAX = 12.1
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
-CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 6.2
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 6.6
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -309,7 +327,14 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 6.2
 #     うえ小幅増額。
 #   - 3着：3回目の検証でもimplied(+2.29pt)が現行(2.7pt)を下回り続けた
 #     ため、さらに減額する。
-NAR_DIST_GOOD_FINISH_BONUS = {1: 7.1, 2: 5.2, 3: 2.5}
+#
+# v3.4（7巡目・同一--calc-versionでの再検証）：
+#   - 1着：引き続き有意（implied+7.80pt、現行7.1pt）→ 半分反映を継続
+#   - 2着：引き続き有意（implied+5.53pt、現行5.2pt）→ 半分反映を継続
+#   - 3着：implied(+2.40pt)が現行(2.5pt)とほぼ一致（ギャップ0.10pt）＝
+#     4回連続で「現行値の方が高い/近い」結果が続いたため、ここで収束と
+#     判断し凍結（変更なし）。
+NAR_DIST_GOOD_FINISH_BONUS = {1: 7.5, 2: 5.4, 3: 2.5}
 # 距離好走1着については、有効走数が少ない馬でさらに強い効果（implied
 # 追加+1.89pt）が確認されたため、該当馬にのみ追加ボーナスを加える
 # （半分反映＝+0.9pt）。2着・3着については有意な低走数交互作用は
@@ -336,18 +361,25 @@ NAR_DIST_GOOD_FINISH_BONUS = {1: 7.1, 2: 5.2, 3: 2.5}
 # 3回連続で非有意という結果が続いている。implied値自体は現行(0.9)と
 # 近いため、無理に変更せず据え置くが、この交互作用の実在性は今後も
 # 注視する。
+#
+# v3.4（7巡目）：同一--calc-versionでの再検証でも「距離好走3着×低走数」
+# implied+4.83pt（現行3.5pt）→ さらに増額。「距離好走2着×低走数」も
+# implied+2.24pt（現行1.1pt）→ 増額。「距離好走1着×低走数」は今回も
+# 非有意（p=0.173、round3以降4回連続で非有意）のため据え置き。
 NAR_DIST_LOW_RUNS_THRESHOLD = 2
 NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.9
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 3.5
-# v3.3新規実装：距離好走2着×低走数も今回有意（implied+2.14pt）となった
-# ため、半分反映（+1.1pt）で新規実装する。
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 1.1
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 4.2
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 1.7
 
 # v3.3新規実装：昇級(前走非勝利)×低走数の交互作用が今回有意
 # （implied+1.62pt）となったため、半分反映（+0.8pt）で新規実装する。
 # 低走数閾値はNAR_DIST_LOW_RUNS_THRESHOLDと共通のNAR_FORM系の枠組みでは
 # なく、こちらも同じ「有効走数<=2」の定義を流用する。
-NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 0.8
+# v3.4：同一--calc-versionでの再検証でも引き続き有意（implied+1.70pt、
+# 現行0.8pt）→ 半分反映を継続。
+NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 1.3
+
+
 def get_region_nar(venue: str) -> str:
     """競馬場名から地区グループ名を返す。未登録の場は単独グループ（場名そのもの）として扱う。"""
     return NAR_REGION_GROUPS.get(venue, venue)
@@ -755,14 +787,32 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 # となったが、この関数は階層式（着差ベースの複数tier合算）のため、
 # 単純な加算1本では組み込みにくい。実装は見送り、次回以降の再現性を
 # 確認してから改めて設計を検討する（TODO）。
+#
+# v3.4（7巡目）：同じ--calc-versionで再検証してもimplied+5.29pt（現行
+# 4.8pt、ギャップ0.49pt）と有意・同方向のため、同じ考え方でCAPを
+# 4.8→5.0（倍率1.042）に引き上げる。
+# また、calc_phase1_nar側に「NAR_FORM_PENALTY_CAPとは別のハードコード
+# された合算上限3.0」が残っており、v2.9でNAR_FORM_PENALTY_CAPが3.0を
+# 超えて以降、この増額分が実質無効化されていたバグを発見・修正した
+# （NAR_COMBINED_PENALTY_CAPとして、他ペナルティ源とのスタッキング分の
+# 余裕を見込みつつNAR_FORM_PENALTY_CAPに連動させる）。
+# 近走不振×低走数の交互作用は2期間連続で有意（round6:+2.32pt、
+# round7:+2.43pt）となったため、NAR_FORM_LOW_RUNS_EXTRA_PENALTYとして
+# 新規実装する（半分反映＝2回のimplied平均(2.375pt)の半分≈1.2pt）。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
     (1.5, 0.9),
-    (3.0, 1.3),
-    (999.0, 2.6),
+    (3.0, 1.4),
+    (999.0, 2.7),
 ]
-NAR_FORM_PENALTY_CAP = 4.8      # 近走不振ペナルティ単体の上限（旧4.5）
+NAR_FORM_PENALTY_CAP = 5.0      # 近走不振ペナルティ単体の上限（旧4.8）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
+# v3.4新規：他の生ペナルティ（大差負け・最下位圏）とのスタッキング分の
+# 余裕（+2.0pt、最下位圏ペナルティの単発最大値相当）を見込んだ合算上限。
+# NAR_FORM_PENALTY_CAPを今後調整しても自動的に連動する。
+NAR_COMBINED_PENALTY_CAP = NAR_FORM_PENALTY_CAP + 2.0
+# v3.4新規：近走不振×低走数の交互作用（半分反映）
+NAR_FORM_LOW_RUNS_EXTRA_PENALTY = 1.2
 
 
 # ── NAR版 昇級勢い（v2.7追加） ────────────────────────────────
@@ -830,7 +880,10 @@ def calc_momentum_bonus_nar(
             # （implied+2.28pt、現行1.4pt、ギャップ0.88pt）となり、
             # サンプルサイズ不足によるブレだったと判明。凍結解除のうえ
             # 半分反映で-1.8ptに引き上げる（旧-1.4pt）。
-            return -1.8, "昇級(前走非勝利)"
+            # v3.4（7巡目・同一--calc-versionでの再検証）：引き続き有意
+            # （implied+2.39pt、現行1.8pt、ギャップ0.59pt）のため、
+            # 同じ考え方で-2.1ptに引き上げる（旧-1.8pt）。
+            return -2.1, "昇級(前走非勝利)"
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -1100,10 +1153,26 @@ def calc_phase1_nar(
     # 効いた分だけ近走不振ペナルティが未キャップで素通りしてしまい、
     # 個別ペナルティを免除した意味が近走不振側で相殺されてしまう
     # （v1.9で発覚：レーザースペックル再検証で96.2に悪化する逆効果を確認）。
+    #
+    # v3.4で発覚した重大バグ修正：ここに近走不振ペナルティ単体の上限
+    # （NAR_FORM_PENALTY_CAP、再キャリブレーションでv2.8の2.7から段階的に
+    # 4.8まで引き上げ済み）とは別に、「他の生ペナルティ込みの合算上限」
+    # として`PENALTY_CAP = 3.0`がハードコードされたまま放置されていた。
+    # 他の生ペナルティ（大差負け＝現在全て0.0、最下位圏＝最大2.0）が0の
+    # 大半の馬では、form_pen_capped = min(form_pen, 3.0 - 0) = min(form_pen, 3.0)
+    # となり、NAR_FORM_PENALTY_CAPをどれだけ引き上げても実際の適用値は
+    # 3.0で頭打ちになっていた（v2.9で3.0を超えて以降、増額分が丸ごと
+    # 無効化されていたことになる）。NAR_FORM_PENALTY_CAP自体に連動する
+    # NAR_COMBINED_PENALTY_CAPとして定義し直し、今後定数を調整しても
+    # 同じ問題が再発しないようにした。
     form_pen, form_label = calc_recent_form_penalty_nar(targets)
+    # v3.4：昇級(前走非勝利)と同様、近走不振×低走数の交互作用が2期間連続
+    # （round6: implied+2.32pt、round7: implied+2.43pt）で有意と確認できた
+    # ため、該当馬には追加ペナルティを加算する（半分反映）。
+    if (form_pen > 0 and result.valid_runs <= NAR_DIST_LOW_RUNS_THRESHOLD):
+        form_pen += NAR_FORM_LOW_RUNS_EXTRA_PENALTY
     if form_pen > 0:
-        PENALTY_CAP = 3.0
-        form_pen_capped = max(0.0, min(form_pen, PENALTY_CAP - raw_pen_total))
+        form_pen_capped = max(0.0, min(form_pen, NAR_COMBINED_PENALTY_CAP - raw_pen_total))
         if form_pen_capped > 0:
             result.phase1_score = round(result.phase1_score + form_pen_capped, 3)
             result.ability_avg  = round(result.ability_avg  + form_pen_capped, 3)
