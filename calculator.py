@@ -4,7 +4,7 @@ Phase1〜Phase4 を固定数式で計算する
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "1.8-jra_recalibration_v6"
+__version__ = "1.9-jra_penalty_cap_bugfix"
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -109,11 +109,27 @@ GRADE_RANK_SCALE = {1: 1.0, 2: 0.8, 3: 0.6, 4: 0.4}
 # 同じ8ヶ月分でも今回implied+6.78pt相当（現行6.3pt、ギャップ0.48pt）と
 # 引き続き有意・同方向のため、同じ考え方でCAP相当を6.3→6.5（倍率1.032）
 # に引き上げる。
+#
+# v1.9（実運用中の個別レース検証で発覚・緊急修正）：NAR側で見つけたのと
+# 全く同じ構造のバグがJRA側（calc_phase1の近走不振適用箇所）にも存在して
+# いた。RECENT_FORM_PENALTY（このリスト、6ラウンドかけて最大+6.5まで
+# 引き上げ済み）とは別に、calc_phase1内にハードコードされた合算上限
+# `PENALTY_CAP = 3.0`（大差負け・最下位圏との合算）が残っており、
+# 大差負け・最下位圏の合計だけで3.0を超える馬（＝まさに近走不振が
+# 深刻な馬）では、近走不振ペナルティが実質ゼロまで削られてしまっていた
+# （2026年京都のレースで、大差負け+最下位圏合計5.0の馬の近走不振+6.3が
+# 丸ごと無効化されているのを実例で確認）。JRA_COMBINED_PENALTY_CAPとして
+# RECENT_FORM_PENALTYの最大tierに連動する形に修正（NAR_COMBINED_PENALTY_CAP
+# と同じ設計）。
 RECENT_FORM_PENALTY = [
     (8.0, 6.5),   # 加重平均着順 ≥ 8.0 → +6.5ポイント（旧+6.3）
     (6.0, 3.4),   # ≥ 6.0 → +3.4（旧+3.3）
     (4.5, 1.2),   # ≥ 4.5 → +1.2（旧+1.2、四捨五入で据え置き）
 ]
+# v1.9新規：他の生ペナルティ（大差負け・最下位圏）とのスタッキング分の
+# 余裕（+2.0pt）を見込んだ合算上限。RECENT_FORM_PENALTYの最大tier値に
+# 自動連動する（今後この値を調整しても連動して動く）。
+JRA_COMBINED_PENALTY_CAP = RECENT_FORM_PENALTY[0][1] + 2.0
 
 # ── 着順ボーナス（スコアから引く、小さいほど良評価）────────────────
 FINISH_BONUS = {
@@ -1642,8 +1658,13 @@ def calc_phase1(
     )
     if form_pen > 0:
         # 最下位圏・大差負けペナルティ合計を計算（二重カウント防止）
-        # 「最下位圏/大差負け」+ 「近走不振」の合計が3.0ptを超えないようにキャップ
-        PENALTY_CAP = 3.0
+        # 「最下位圏/大差負け」+ 「近走不振」の合計がJRA_COMBINED_PENALTY_CAP
+        # を超えないようにキャップ
+        # v1.9修正：ここに以前ハードコードされていた`PENALTY_CAP = 3.0`が、
+        # RECENT_FORM_PENALTY側の再キャリブレーション（最大+6.5まで引き上げ
+        # 済み）を無視して近走不振ペナルティを実質無効化していたバグを修正
+        # （NAR側と同一構造のバグ。JRA_COMBINED_PENALTY_CAPに置き換え、
+        # RECENT_FORM_PENALTYの最大tierに自動連動させた）。
         heavy_pen_total = 0.0
         for note_item in penalty_notes:
             # "最下位圏(13/15頭):+1.0" や "大差負け(1.5秒):+2.0" から値を抽出
@@ -1651,8 +1672,8 @@ def calc_phase1(
             m = _re_pen.search(r":(\+[\d.]+)", note_item)
             if m:
                 heavy_pen_total += float(m.group(1))
-        # キャップ適用：合計がPENALTY_CAPを超えない範囲で近走不振ペナルティを加算
-        form_pen_capped = max(0.0, min(form_pen, PENALTY_CAP - heavy_pen_total))
+        # キャップ適用：合計がJRA_COMBINED_PENALTY_CAPを超えない範囲で近走不振ペナルティを加算
+        form_pen_capped = max(0.0, min(form_pen, JRA_COMBINED_PENALTY_CAP - heavy_pen_total))
         if form_pen_capped > 0:
             result.phase1_score = round(result.phase1_score + form_pen_capped, 3)
             result.ability_avg  = round(result.ability_avg  + form_pen_capped, 3)

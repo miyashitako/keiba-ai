@@ -663,6 +663,7 @@ def fetch_all_horses_nar_backtest(
     past_limit: int = 3,
     horse_cache: "dict | None" = None,
     sleep_sec: float = 1.0,
+    use_cache: bool = True,
 ) -> tuple[RaceInfo, list]:
     """
     レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
@@ -679,9 +680,33 @@ def fetch_all_horses_nar_backtest(
     horse_cache : {horse_id: 生涯全走list[PastRace]} の辞書を渡すと、
         同じ馬について複数レースをまたいで再取得しない
         （batch_backtest.pyのような一括処理向け）。
+
+    use_cache : v1.2追加（JRA側scraper.py v2.0と合わせて）。Trueなら
+        ローカルディスクキャッシュ（local_cache.py）を使う。詳細は
+        scraper.pyのfetch_all_horses_backtestのdocstring参照。
+        v1.3：local_cache.pyが無い環境ではクラッシュせずキャッシュなしに
+        自動フォールバックする（scraper.py v2.1と合わせて）。
     """
+    if use_cache:
+        try:
+            import local_cache
+        except ImportError:
+            print("[WARN] local_cache.pyが見つからないため、キャッシュなしで実行します。")
+            use_cache = False
+
     race_id = build_nar_race_id(venue, race_date, race_no, year=year)
-    race_info, horses = fetch_race_result_nar(race_id)
+
+    race_info = None
+    horses = None
+    if use_cache:
+        cached = local_cache.get_race_result(race_id)
+        if cached is not None:
+            race_info, horses = cached
+
+    if race_info is None:
+        race_info, horses = fetch_race_result_nar(race_id)
+        if use_cache:
+            local_cache.set_race_result(race_id, race_info, horses)
 
     if isinstance(race_date, datetime.date):
         target_date_str = f"{race_date.year}/{race_date.month:02d}/{race_date.day:02d}"
@@ -695,10 +720,18 @@ def fetch_all_horses_nar_backtest(
             if horse_cache is not None and horse.horse_id in horse_cache:
                 full_history = horse_cache[horse.horse_id]
             else:
-                full_history = fetch_past_races(horse.horse_id, limit=None)
+                full_history = None
+                if use_cache:
+                    full_history = local_cache.get_horse_past_races(
+                        horse.horse_id, min_valid_date=target_date_str
+                    )
+                if full_history is None:
+                    full_history = fetch_past_races(horse.horse_id, limit=None)
+                    if use_cache:
+                        local_cache.set_horse_past_races(horse.horse_id, full_history)
+                    time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
                 if horse_cache is not None:
                     horse_cache[horse.horse_id] = full_history
-                time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
 
             if target_date_str:
                 horse.past_races = filter_past_races_before(full_history, target_date_str)[:past_limit]
@@ -773,3 +806,57 @@ def fetch_nar_race_ids_for_date(
             continue
         race_ids.append(rid)
     return race_ids
+
+
+def fetch_nar_schedule_for_date(race_date: "datetime.date | str") -> dict:
+    """
+    指定日にNARで実際に開催されたレースを、nar.netkeiba.comの開催日程
+    ページ（race_list.html）からまとめて取得する（v1.2追加）。
+
+    JRA側のfetch_jra_race_ids_for_dateと同じ発想。これが使えれば、
+    「14場×12レース総当たり」という無駄なリクエストをせずに済み、
+    開催のない場・レース番号を最初からスキップできる。
+
+    Returns
+    -------
+    {venue_name: [race_id, ...]} の辞書。
+    ページが取得できない・想定と違う構造だった場合は空dictを返す
+    （呼び出し側はfetch_nar_race_ids_for_dateによる総当たりにフォール
+    バックすること）。
+
+    ★このサンドボックス環境からはnar.netkeiba.comへネットワーク到達
+    できないため、このページ（race_list.html）が実在するか・想定通りの
+    URLパラメータで動くかは未検証。空dictが返り続ける場合はページ構造が
+    違うということなので、素直に総当たりにフォールバックする設計にして
+    ある。
+    """
+    if isinstance(race_date, datetime.date):
+        date_str = f"{race_date.year:04d}{race_date.month:02d}{race_date.day:02d}"
+    else:
+        date_str = str(race_date).replace("-", "").replace("/", "")
+
+    url = f"https://nar.netkeiba.com/top/race_list.html?kaisai_date={date_str}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=15)
+    except Exception:
+        return {}
+    if res.status_code != 200:
+        return {}
+
+    html_text = res.content.decode("utf-8", errors="replace")
+    race_ids = sorted(set(re.findall(r"race_id=(\d{12})", html_text)))
+    if not race_ids:
+        return {}
+
+    schedule: dict = {}
+    for rid in race_ids:
+        try:
+            info = parse_nar_race_id(rid)
+        except Exception:
+            continue
+        venue_name = info.get("venue_name", "不明")
+        if venue_name == "不明":
+            continue
+        schedule.setdefault(venue_name, []).append(rid)
+
+    return schedule

@@ -5,7 +5,7 @@ netkeiba スクレイピングモジュール
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.0-jra_race_list_rate_limit_fix"
+__version__ = "2.1-local_cache_graceful_fallback"
 
 import requests
 import datetime
@@ -916,7 +916,22 @@ def fetch_all_horses_backtest(
         （それより後の対象日を検証する場合は自動的に再取得される）。
         Falseにすると従来通り常にネットワークから取得する（キャッシュの
         内容に疑いがある場合や、最新データを強制的に取り直したい場合用）。
+
+        v2.1：local_cache.pyがデプロイ環境（Streamlit Cloud等）に存在
+        しない場合、ImportErrorでクラッシュせず自動的にキャッシュなし
+        （従来通り毎回ネットワーク取得）にフォールバックする。答え合わせ
+        モードのような単発実行では、キャッシュ用の補助ファイルが1つ
+        足りないだけで機能全体が止まるのは望ましくないため。
     """
+    if use_cache:
+        try:
+            import local_cache
+        except ImportError:
+            print("[WARN] local_cache.pyが見つからないため、キャッシュなしで実行します"
+                  "（機能自体には影響ありません。継続的に使う場合はlocal_cache.pyを"
+                  "デプロイ環境に追加してください）。")
+            use_cache = False
+
     if re.fullmatch(r"\d{8,}", race_url.strip()):
         race_id = race_url.strip()
     else:
@@ -927,7 +942,6 @@ def fetch_all_horses_backtest(
     race_info = None
     horses = None
     if use_cache:
-        import local_cache
         cached = local_cache.get_race_result(race_id)
         if cached is not None:
             race_info, horses = cached
@@ -935,7 +949,6 @@ def fetch_all_horses_backtest(
     if race_info is None:
         race_info, horses = fetch_race_result(race_id)
         if use_cache:
-            import local_cache
             local_cache.set_race_result(race_id, race_info, horses)
 
     # race_infoのrace_date（例："2026年8月14日"）を
@@ -954,14 +967,12 @@ def fetch_all_horses_backtest(
             else:
                 full_history = None
                 if use_cache:
-                    import local_cache
                     full_history = local_cache.get_horse_past_races(
                         horse.horse_id, min_valid_date=target_date_str
                     )
                 if full_history is None:
                     full_history = fetch_past_races(horse.horse_id, limit=None)
                     if use_cache:
-                        import local_cache
                         local_cache.set_horse_past_races(horse.horse_id, full_history)
                     time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
                 if horse_cache is not None:
