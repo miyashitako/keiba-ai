@@ -37,7 +37,15 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.5-recalibration_v8_post_bugfix_stabilization"
+__version__ = "3.8-nar_remove_margin_invalidation"
+
+# ── v3.6 再キャリブレーション反映（2026/9/7・9巡目）─────────────────
+# 距離好走1・2着、近走不振、昇級(前走非勝利)、中央転入は引き続き有意・
+# 同方向で半分反映を継続。距離好走3着は現行値に対しわずかにimplied超過
+# （ギャップ0.27pt）だが1・2着に比べ相対的に小さく、引き続き凍結。
+# 距離好走1着×低走数の交互作用は、これで6回連続非有意（有意だったのは
+# round3の1回のみ）となったため、round3の結果自体が偽陽性だったと判断し
+# 撤去する（0に設定）。
 
 # ── v3.5 再キャリブレーション反映（2026/9/6・8巡目）─────────────────
 # v3.4のペナルティ上限バグ修正後、初めて新コードでデータを再収集して検証。
@@ -299,10 +307,15 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 # 引き続き半分反映を継続。低走数側の実効値もimplied+6.20pt相当・現行実効
 # 5.5pt（12.1-6.6）で、ギャップ0.70ptとやや広がったが、換算スケール変化の
 # 影響とみられる。
-CENTRAL_TRANSFER_BONUS_PER_RACE = 5.4
-CENTRAL_TRANSFER_BONUS_MAX = 13.0
+#
+# v3.6（9巡目）：3走以上側は今回もimplied+14.63pt相当と有意に高いまま
+# （現行13.0pt、ギャップ1.63pt）で、引き続き半分反映を継続。低走数側の
+# 実効値もimplied+6.52pt相当・現行実効5.8pt（13.0-7.2）で、ギャップ
+# 0.72ptとやや広がっている。
+CENTRAL_TRANSFER_BONUS_PER_RACE = 5.7
+CENTRAL_TRANSFER_BONUS_MAX = 13.8
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
-CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 7.2
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 7.6
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -359,7 +372,24 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 7.2
 #   - 3着：implied(+2.63pt)が現行(2.5pt)をわずかに上回った（ギャップ
 #     0.13pt）が、1・2着に比べ相対的なギャップは小さく（換算スケール変化
 #     の影響とみられる）、収束傾向が続いていると判断し凍結を継続。
-NAR_DIST_GOOD_FINISH_BONUS = {1: 8.0, 2: 5.7, 3: 2.5}
+#
+# v3.6（9巡目）：
+#   - 1着：引き続き有意（implied+8.98pt、現行8.0pt）→ 半分反映を継続
+#   - 2着：引き続き有意（implied+6.37pt、現行5.7pt）→ 半分反映を継続
+#   - 3着：implied(+2.77pt)が現行(2.5pt)を上回った（ギャップ0.27pt）が、
+#     1・2着（ギャップ0.98/0.67pt）に比べ依然として小さく、収束傾向が
+#     続いていると判断し凍結を継続。
+NAR_DIST_GOOD_FINISH_BONUS = {1: 8.5, 2: 6.0, 3: 2.5}
+
+# v3.8：ユーザーの実戦知見（NARでは着差が大きくても直近2・3着なら上位に
+# 来やすい傾向がある）に基づき、JRA側のDIST_BONUS_MARGIN_THRESHOLDS
+# （0.5秒超で無効化＝margin_scale=0.0）とは別に、NAR専用の着差テーブルを
+# 用意する。着差による無効化自体をなくし、着差に関わらず常にフルボーナス
+# （scale=1.0）を適用する（calc_distance_aptitude_bonus()のmargin_thresholds
+# 引数として渡す。JRA側の挙動には一切影響しない）。
+NAR_DIST_BONUS_MARGIN_THRESHOLDS = [
+    (9999.0, 1.0),   # 着差に関わらず常にフルボーナス（無効化なし）
+]
 # 距離好走1着については、有効走数が少ない馬でさらに強い効果（implied
 # 追加+1.89pt）が確認されたため、該当馬にのみ追加ボーナスを加える
 # （半分反映＝+0.9pt）。2着・3着については有意な低走数交互作用は
@@ -398,10 +428,16 @@ NAR_DIST_GOOD_FINISH_BONUS = {1: 8.0, 2: 5.7, 3: 2.5}
 # 非有意）。round3の1回だけ有意だった結果自体が偽陽性だった可能性が
 # 高まってきており、次回以降も非有意が続くようなら撤去（0への削減）を
 # 検討する。
+#
+# v3.6（9巡目）：「距離好走3着×低走数」implied+5.56pt（現行4.7pt）→
+# さらに増額。「距離好走2着×低走数」implied+2.58pt（現行2.1pt）→増額。
+# 「距離好走1着×低走数」は今回もp=0.173で非有意（round3以降6回連続
+# 非有意）。round3の1回のみの有意という結果が偽陽性だった可能性が
+# 十分高いと判断し、ここで撤去する（0に設定）。
 NAR_DIST_LOW_RUNS_THRESHOLD = 2
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.9
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 4.7
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 2.1
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.0   # v3.6で撤去（旧0.9。round3以降6回連続非有意のため）
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 5.1
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 2.3
 
 # v3.3新規実装：昇級(前走非勝利)×低走数の交互作用が今回有意
 # （implied+1.62pt）となったため、半分反映（+0.8pt）で新規実装する。
@@ -410,7 +446,8 @@ NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 2.1
 # v3.4：同一--calc-versionでの再検証でも引き続き有意（implied+1.70pt、
 # 現行0.8pt）→ 半分反映を継続。
 # v3.5：引き続き有意（implied+1.86pt、現行1.3pt）→ 半分反映を継続。
-NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 1.6
+# v3.6：引き続き有意（implied+1.96pt、現行1.6pt）→ 半分反映を継続。
+NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 1.8
 
 
 def get_region_nar(venue: str) -> str:
@@ -840,20 +877,25 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 # 引き続き有意・同方向のため、同じ考え方でCAPを5.0→5.4（倍率1.08）に
 # 引き上げる。近走不振×低走数の交互作用も引き続き有意
 # （implied+2.66pt、現行1.2pt）→ 半分反映を継続。
+#
+# v3.6（9巡目）：今回もimplied+6.09pt（現行5.4pt、ギャップ0.69pt）と
+# 引き続き有意・同方向のため、同じ考え方でCAPを5.4→5.7（倍率1.056）に
+# 引き上げる。近走不振×低走数の交互作用も引き続き有意
+# （implied+2.80pt、現行1.9pt）→ 半分反映を継続。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
-    (1.5, 1.0),
-    (3.0, 1.5),
-    (999.0, 2.9),
+    (1.5, 1.1),
+    (3.0, 1.6),
+    (999.0, 3.1),
 ]
-NAR_FORM_PENALTY_CAP = 5.4      # 近走不振ペナルティ単体の上限（旧5.0）
+NAR_FORM_PENALTY_CAP = 5.7      # 近走不振ペナルティ単体の上限（旧5.4）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 # v3.4新規：他の生ペナルティ（大差負け・最下位圏）とのスタッキング分の
 # 余裕（+2.0pt、最下位圏ペナルティの単発最大値相当）を見込んだ合算上限。
 # NAR_FORM_PENALTY_CAPを今後調整しても自動的に連動する。
 NAR_COMBINED_PENALTY_CAP = NAR_FORM_PENALTY_CAP + 2.0
-# v3.5：近走不振×低走数の交互作用（半分反映を継続）
-NAR_FORM_LOW_RUNS_EXTRA_PENALTY = 1.9
+# v3.6：近走不振×低走数の交互作用（半分反映を継続）
+NAR_FORM_LOW_RUNS_EXTRA_PENALTY = 2.4
 
 
 # ── NAR版 昇級勢い（v2.7追加） ────────────────────────────────
@@ -927,7 +969,10 @@ def calc_momentum_bonus_nar(
             # v3.5（8巡目・バグ修正後の初再検証）：引き続き有意
             # （implied+2.62pt、現行2.1pt、ギャップ0.52pt）のため、
             # 同じ考え方で-2.4ptに引き上げる（旧-2.1pt）。
-            return -2.4, "昇級(前走非勝利)"
+            # v3.6（9巡目）：引き続き有意（implied+2.75pt、現行2.4pt、
+            # ギャップ0.35pt）のため、同じ考え方で-2.6ptに引き上げる
+            # （旧-2.4pt）。
+            return -2.6, "昇級(前走非勝利)"
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -1217,14 +1262,19 @@ def calc_phase1_nar(
         form_pen += NAR_FORM_LOW_RUNS_EXTRA_PENALTY
     if form_pen > 0:
         form_pen_capped = max(0.0, min(form_pen, NAR_COMBINED_PENALTY_CAP - raw_pen_total))
+        # v3.7修正：calc_recent_form_penalty_nar()のform_labelには実際の
+        # 加算値が含まれておらず（JRA側の"+{penalty:.1f}"と違い、着外走数の
+        # 説明のみ）、個別レース検証で「メモから点数が読み取れない」ことが
+        # 判明した。ここで必ず実際に適用された値（低走数加算・キャップ後の
+        # 最終値）を明示的に表示するよう修正する。
         if form_pen_capped > 0:
             result.phase1_score = round(result.phase1_score + form_pen_capped, 3)
             result.ability_avg  = round(result.ability_avg  + form_pen_capped, 3)
             result.best_time    = round(result.best_time    + form_pen_capped, 3)
-            label_suffix = f"(cap:{form_pen_capped:.1f})" if form_pen_capped < form_pen else ""
+            label_suffix = f":+{form_pen_capped:.1f}" if form_pen_capped == form_pen else f":+{form_pen_capped:.1f}(cap前{form_pen:.1f})"
             result.note = (result.note + f" [{form_label}{label_suffix}]").strip()
         elif form_pen > 0:
-            result.note = (result.note + f" [{form_label}→cap済]").strip()
+            result.note = (result.note + f" [{form_label}:+{form_pen:.1f}→cap済(0)]").strip()
 
     # ── 出走間隔補正
     if race_date and past_races_all:
@@ -1279,13 +1329,15 @@ def calc_phase1_nar(
 
     # ── 距離適性ボーナス（calculator.pyの関数をそのまま流用。ただしv2.8で
     #    NAR専用のNAR_DIST_GOOD_FINISH_BONUSをbonus_table引数で渡すように
-    #    変更。JRA側（calculator.py）の挙動には影響しない）
+    #    変更。v3.8でNAR専用の着差テーブル（無効化なし）も追加。
+    #    JRA側（calculator.py）の挙動には影響しない）
     if use_dist_aptitude and target_distance > 0:
         dist_bonus, dist_label = calc_distance_aptitude_bonus(
             past_races_all, target_distance,
             target_surface=target_surface,
             all_past_races=past_races_all,
             bonus_table=NAR_DIST_GOOD_FINISH_BONUS,
+            margin_thresholds=NAR_DIST_BONUS_MARGIN_THRESHOLDS,
         )
         # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
         # 追加の交互作用効果がrecalibrate.pyで確認されたため、該当馬には
