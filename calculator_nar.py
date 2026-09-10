@@ -37,7 +37,26 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.10-jra_transfer_class_fix"
+__version__ = "3.11-dist_bonus_recency_decay"
+
+# ── v3.11（2026/9/9）：距離好走ボーナスへの時系列減衰導入 ──────────────
+# ユーザー指摘：距離好走ボーナスが再キャリブレーションで物理的にありえない
+# 水準（1着で+8.9pt。元設計の「1600m基準タイム秒数がそのまま点数」という
+# 思想に照らすと、未勝利馬が1600mを1分26秒台で走るのと同義）まで育って
+# しまっていた。原因は「何走前の好走でも同じ満額」という設計（経過時間の
+# 重み付けが皆無）にあると判断し、calc_grade_bonus()の馬齢限定戦モードで
+# 既に使われているTIME_WEIGHTS=[1.0,0.7,0.5,0.3,0.2,0.1]（インデックス0=
+# 直近走）と同じ考え方・同じ値を、DIST_BONUS_RECENCY_WEIGHTSとして
+# calc_distance_aptitude_bonus()にも導入（calculator.py側に追加、NAR側の
+# 呼び出しでのみ有効化）。これに伴い、①②の候補選定ロジックも「最も着順が
+# 良い1走」から「減衰込みの実効ボーナスが最大の1走」に変更（同着順でも
+# 古い実績より直近の実績を優先するため）。JRA側は今回未変更（recency_weights
+# 未指定＝従来通り無減衰のまま）。
+#
+# 次のタスク（未着手）：通常の成績（ability_avg）も現状「直近3走で打ち切り、
+# それ以降は完全無視」という粗い設計になっている。同じ時系列減衰の考え方を
+# 使って、3走で打ち切らずもっと遡って見た上で減衰させる仕組みに置き換える
+# ことを検討中。
 
 # ── v3.10（2026/9/9）：JRA転入馬の過去走クラス評価バグ修正 ──────────────
 # ユーザー指摘（門別7R ルクスドリームの事例）：地方競馬側は実際の受け入れ
@@ -181,6 +200,7 @@ from calculator import (
     MARGIN_BONUS_THRESHOLDS,
     RELATIVE_FINISH_PENALTY,
     WEIGHT_RECENT,
+    DIST_BONUS_RECENCY_WEIGHTS,   # v3.11追加：距離好走ボーナスの時系列減衰テーブル
     BASE_WEIGHT,
     BEST_BONUS_FACTOR,
     INSTABILITY_FACTOR,
@@ -1445,6 +1465,7 @@ def calc_phase1_nar(
             all_past_races=past_races_all,
             bonus_table=NAR_DIST_GOOD_FINISH_BONUS,
             margin_thresholds=NAR_DIST_BONUS_MARGIN_THRESHOLDS,
+            recency_weights=DIST_BONUS_RECENCY_WEIGHTS,  # v3.11追加：時系列減衰
         )
         # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
         # 追加の交互作用効果がrecalibrate.pyで確認されたため、該当馬には
