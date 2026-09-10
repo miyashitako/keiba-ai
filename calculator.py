@@ -172,6 +172,14 @@ MARGIN_BONUS_THRESHOLDS = [
 
 WEIGHT_RECENT = [0.5, 0.3, 0.2]
 
+# ── 距離好走ボーナス用・時系列減衰テーブル（v1.10追加）─────────────────
+# calc_grade_bonus()の馬齢限定戦モード（TIME_WEIGHTS）と同じ考え方・同じ値。
+# インデックス0=直近走。「古い実績ほど現在の力量を反映しないため直近重視」
+# という同じ設計思想を距離好走ボーナスにも適用する（距離好走が何走前の
+# 実績でも同じ満額ボーナスになってしまっていた問題への対応）。
+# Noneを渡した場合（デフォルト）は従来通り無減衰（JRA側の挙動は不変）。
+DIST_BONUS_RECENCY_WEIGHTS = [1.0, 0.7, 0.5, 0.3, 0.2, 0.1]
+
 # Phase2係数（着順のばらつきベース）
 INSTABILITY_FACTOR   = 0.3   # 着順std × 0.3 をペナルティ
 BEST_BONUS_FACTOR    = 0.5   # ベスト着順との乖離ボーナス（旧互換）
@@ -894,6 +902,17 @@ def calc_distance_aptitude_bonus(
                                        # 傾向がある」というユーザーの実戦知見に
                                        # 基づき、着差による無効化自体をなくした
                                        # 専用テーブルを渡す。
+    recency_weights: list = None,   # v1.10追加：距離好走の時系列減衰テーブル
+                                      # （DIST_BONUS_RECENCY_WEIGHTS相当）。
+                                      # インデックス0=直近走、それ以降は配列の
+                                      # 値を掛けて減衰させ、配列長を超えたら
+                                      # 最後の値（下限）を使い続ける。Noneなら
+                                      # 従来通り無減衰（JRA側の挙動は不変。
+                                      # NAR側は再キャリブレーションで距離好走
+                                      # ボーナスが物理的にありえない水準まで
+                                      # 育ってしまった原因が「何走前の好走でも
+                                      # 同じ満額」だったことに起因すると判断し、
+                                      # v3.11でこの引数を渡すよう変更）。
 ) -> tuple[float, str]:
     """
     距離適性ボーナスを計算して返す（v1.0改訂）。
@@ -904,6 +923,15 @@ def calc_distance_aptitude_bonus(
     ③ 800m超乖離 → ボーナスなし（距離評価対象外）
     ④ スタミナ証明（今回距離+400m超の完走実績）
     ⑤ 芝ダ違いペナルティ（今回と異なる芝ダの走しかない場合）
+
+    recency_weights指定時（v1.10）：
+    ①②の対象候補（±800m以内・3着以内の全過去走）それぞれについて
+    「基礎ボーナス×距離近さ係数×着差係数×時系列減衰」を計算し、
+    その中で実効ボーナスが最大になる1走を採用する。無減衰時は
+    「最も着順が良い（同着順なら距離が近い）1走」を機械的に選んでいた
+    が、これだと大昔の好走が直近の僅差2着より優先されてしまうため、
+    減衰込みの実効値で選び直す必要がある（同じ最大値が複数あれば
+    より直近のものを優先）。
     """
     # past_racesが空でもall_past_racesがあれば芝ダ初挑戦判定のために処理継続
     _has_any_races = past_races or (all_past_races is not None and all_past_races)
@@ -914,7 +942,49 @@ def calc_distance_aptitude_bonus(
     good_finish_bonus = 0.0
     best_finish_label = ""
 
-    # ±800m以内の好走走を収集
+    _table = bonus_table if bonus_table is not None else DIST_GOOD_FINISH_BONUS
+    _margin_table = margin_thresholds if margin_thresholds is not None else DIST_BONUS_MARGIN_THRESHOLDS
+
+    def _margin_scale_of(pr) -> float:
+        if pr.winner_time_sec > 0 and pr.time_sec > pr.winner_time_sec:
+            gap_from_winner = pr.time_sec - pr.winner_time_sec
+        elif pr.finish == 1:
+            gap_from_winner = 0.0
+        else:
+            gap_from_winner = pr.margin
+        for threshold, scale in _margin_table:
+            if gap_from_winner <= threshold:
+                return scale
+        return 0.0
+
+    if recency_weights:
+        # ── 時系列減衰あり：候補全体から実効ボーナス最大の1走を選ぶ
+        candidates = []
+        for idx, pr in enumerate(past_races):
+            if abs(pr.distance - target_distance) >= 800 or not (1 <= pr.finish <= 3):
+                continue
+            base = _table.get(pr.finish, 0.0)
+            dist_diff = abs(pr.distance - target_distance)
+            closeness = 1.0 if dist_diff <= 400 else 0.5
+            m_scale = _margin_scale_of(pr)
+            decay = recency_weights[idx] if idx < len(recency_weights) else recency_weights[-1]
+            eff = round(base * closeness * m_scale * decay, 3)
+            candidates.append((eff, idx, pr, m_scale, decay))
+        if candidates:
+            # 実効ボーナス最大を優先、同値ならより直近（idxが小さい）を優先
+            candidates.sort(key=lambda c: (-c[0], c[1]))
+            good_finish_bonus, _best_idx, best_pr, best_m_scale, best_decay = candidates[0]
+            if good_finish_bonus > 0:
+                decay_note = f"・減衰{best_decay:.2f}" if best_decay < 1.0 else ""
+                best_finish_label = f"距離好走{best_pr.finish}着:{good_finish_bonus:+.3f}{decay_note}"
+            elif best_m_scale == 0.0 and _table.get(best_pr.finish, 0.0) > 0:
+                best_finish_label = f"距離{best_pr.finish}着(着差大無効)"
+        return _apply_stamina_and_surface_penalty(
+            good_finish_bonus, best_finish_label, past_races, target_distance,
+            target_surface, all_past_races,
+        )
+
+    # ── 減衰なし（従来ロジック・JRA側は挙動不変）─────────────────────
     near_good = [
         pr for pr in past_races
         if abs(pr.distance - target_distance) < 800   # 800m未満（800mは対象外）
@@ -922,7 +992,6 @@ def calc_distance_aptitude_bonus(
     ]
     if near_good:
         best_pr = min(near_good, key=lambda pr: (pr.finish, abs(pr.distance - target_distance)))
-        _table = bonus_table if bonus_table is not None else DIST_GOOD_FINISH_BONUS
         base = _table.get(best_pr.finish, 0.0)
 
         dist_diff = abs(best_pr.distance - target_distance)
@@ -932,20 +1001,7 @@ def calc_distance_aptitude_bonus(
         else:
             closeness = 0.5   # ②半額（400〜800m）
 
-        # 着差フィルター
-        if best_pr.winner_time_sec > 0 and best_pr.time_sec > best_pr.winner_time_sec:
-            gap_from_winner = best_pr.time_sec - best_pr.winner_time_sec
-        elif best_pr.finish == 1:
-            gap_from_winner = 0.0
-        else:
-            gap_from_winner = best_pr.margin
-
-        margin_scale = 0.0
-        _margin_table = margin_thresholds if margin_thresholds is not None else DIST_BONUS_MARGIN_THRESHOLDS
-        for threshold, scale in _margin_table:
-            if gap_from_winner <= threshold:
-                margin_scale = scale
-                break
+        margin_scale = _margin_scale_of(best_pr)
 
         good_finish_bonus = round(base * closeness * margin_scale, 3)
         if good_finish_bonus > 0:
@@ -953,7 +1009,27 @@ def calc_distance_aptitude_bonus(
         elif margin_scale == 0.0 and base > 0:
             best_finish_label = f"距離{best_pr.finish}着(着差大無効)"
 
-    # ── ④ スタミナ証明（今回距離+400m超の完走実績）
+    return _apply_stamina_and_surface_penalty(
+        good_finish_bonus, best_finish_label, past_races, target_distance,
+        target_surface, all_past_races,
+    )
+
+
+def _apply_stamina_and_surface_penalty(
+    good_finish_bonus: float,
+    best_finish_label: str,
+    past_races: list,
+    target_distance: int,
+    target_surface: str,
+    all_past_races: list,
+) -> tuple[float, str]:
+    """
+    calc_distance_aptitude_bonus()の④スタミナ証明・⑤芝ダ転向・⑥距離ミス
+    マッチ判定部分を切り出したヘルパー（v1.10）。①②（距離好走ボーナス）
+    は減衰あり・なしで選び方が分岐するため呼び出し元で計算済みとし、
+    その結果（good_finish_bonus・best_finish_label）を受け取って残りの
+    判定を行う。ロジック自体はv1.0改訂時から変更なし。
+    """
     stamina_bonus = 0.0
     stamina_label = ""
     stamina_races = [
