@@ -8,6 +8,7 @@ import pandas as pd
 
 from scraper import fetch_all_horses, fetch_all_horses_backtest, RaceInfo
 from results_logger import log_backtest_results
+import calculator
 try:
     from calculator import (
         calc_phase1, calc_phase2, calc_phase2_all,
@@ -667,12 +668,20 @@ if st.session_state.phase2_results:
         # ── Google Sheetsへの記録（v1.8追加）────────────────
         if st.button("📝 この結果をGoogle Sheetsに記録", key="jra_log_to_sheets_btn"):
             with st.spinner("Google Sheetsに記録中..."):
+                # v1.9追加：Phase4判定（混戦度合い）も一緒に記録する。
+                # ここではログ対象と同じ`ranking`（Phase5/展開バイアス等
+                # 適用済みの最終表示ランキング）から計算する
+                # （batch_backtest.pyと揃え、③セクション表示用の
+                # ranking_baseとは別に計算する）。
+                _phase4_for_log = calc_phase4(ranking)
                 ok, msg = log_backtest_results(
                     system="JRA",
                     race_info=st.session_state.race_info,
                     horses=st.session_state.horses,
                     display_results=ranking,
                     phase5_applied=st.session_state.get("phase5_applied", False),
+                    calc_version=calculator.__version__,   # v1.9追加：元々渡し忘れていた
+                    phase4_result=_phase4_for_log,
                 )
             if ok:
                 st.success(msg)

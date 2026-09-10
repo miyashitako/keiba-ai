@@ -272,12 +272,18 @@ if st.session_state.nar_race_info is not None:
         # ── Google Sheetsへの記録（v0.3追加）────────────────
         if st.button("📝 この結果をGoogle Sheetsに記録", key="nar_log_to_sheets_btn"):
             with st.spinner("Google Sheetsに記録中..."):
+                # v0.4追加：Phase4判定（混戦度合い）とcalc_versionも
+                # 一緒に記録する（calc_versionは元々渡し忘れていた）。
+                # ログ対象と同じdisplay_resultsから計算する。
+                _phase4_for_log = cn.calc_phase4(display_results)
                 ok, msg = log_backtest_results(
                     system="NAR",
                     race_info=race_info,
                     horses=horses,
                     display_results=display_results,
                     phase5_applied=st.session_state.nar_phase5_applied,
+                    calc_version=cn.__version__,
+                    phase4_result=_phase4_for_log,
                 )
             if ok:
                 st.success(msg)
