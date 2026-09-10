@@ -37,7 +37,21 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.9-recalibration_v10"
+__version__ = "3.10-jra_transfer_class_fix"
+
+# ── v3.10（2026/9/9）：JRA転入馬の過去走クラス評価バグ修正 ──────────────
+# ユーザー指摘（門別7R ルクスドリームの事例）：地方競馬側は実際の受け入れ
+# 運用として「未勝利→C、1勝→B、2勝→A、3勝以上→OP」という格付けで転入馬を
+# 評価している（転入時点で実力査定済み）。しかし従来はJRA時代の過去走を
+# JRA内部のクラス階層（CLASS_BASE：未勝利=95が1勝クラス=92より3pt格下等）
+# のまま採点していたため、地方側の格付けでは存在しないはずの差（未勝利
+# だったことへの追加ペナルティ）が中央転入初戦の評価に混入していた。
+# get_jra_transfer_class_base()を新設し、JRA時代の過去走（is_local=False）
+# のみ地方受け入れ格付けのクラス基準値で採点するよう修正。
+# 注意：昇級勢い（calc_momentum_bonus_nar）・格上挑戦除外ロジックは今回
+# 未修正（同じ問題を抱えている可能性があるが、現行の昇級系タグの再
+# キャリブレーション値は旧ロジックのデータに基づいているため、変更する
+# 場合は別途データへの影響を検討してから行うこと）。
 
 # ── v3.9 再キャリブレーション反映（2026/9/8・10巡目）────────────────
 # v3.6投入時点（着差大無効撤去・近走不振ラベル修正の前）のデータで再検証。
@@ -815,6 +829,49 @@ def get_class_base_nar(race_class: str) -> float:
     return CLASS_BASE_NAR_DEFAULT
 
 
+# ── JRA→NAR転入クラス格付けマップ（v3.10追加）───────────────────────
+# ユーザー指摘（2026/9/9・門別7R ルクスドリームの事例）に基づく修正：
+# 地方競馬側は実際の受け入れ運用として「未勝利→C、1勝→B、2勝→A、
+# 3勝以上→OP」という格付けでJRA転入馬を評価している。しかし従来の
+# calc_race_point_narは、JRA時代の過去走をget_class_base_nar()経由で
+# 素点化する際、race_class文字列がCLASS_BASE（JRA内部の階層）に
+# フォールスルーし、JRA内部の相対階層（未勝利=95が1勝クラス=92より
+# 3pt格下）がそのまま使われてしまっていた。この3pt差は、地方側の
+# 受け入れクラス格付けでは実在しない（未勝利も1勝クラスも同じCクラス
+# 扱い）はずのペナルティであり、転入初戦の評価を不当に下げていた。
+#
+# このマップはJRA転入馬の過去走（is_local=False）を採点する際にのみ
+# 使う想定（calc_phase1_nar側でis_localを見て呼び分ける）。重賞・Jpn等、
+# CLASS_BASE①の完全一致で既にNAR側のOP(80.0)と揃っているクラスは
+# ここに含めない（変換不要のため通常のget_class_base_nar()に委ねる）。
+JRA_TO_NAR_TRANSFER_CLASS = {
+    "未勝利": "C",
+    "新馬": "C",        # 新馬の格付けは要継続検証（ひとまず未勝利と同格扱い）
+    "1勝クラス": "B",
+    "500万下": "B",
+    "2勝クラス": "A",
+    "1000万下": "A",
+    "3勝クラス": "OP",
+    "1600万下": "OP",
+}
+
+
+def get_jra_transfer_class_base(race_class: str) -> "float | None":
+    """
+    JRA時代のクラス表記から、地方競馬側の実際の受け入れクラス格付け
+    （未勝利→C、1勝→B、2勝→A、3勝以上→OP）に対応するNARクラス基準値を
+    返す（v3.10追加）。JRA_TO_NAR_TRANSFER_CLASSに該当しない場合（重賞・
+    Jpn等、既にNAR側のOPと揃っているクラス、またはNAR自身のクラス表記）
+    はNoneを返す。呼び出し側はNoneの場合、通常のget_class_base_nar()に
+    フォールバックすること。
+    """
+    rc = _normalize_grade(race_class)
+    for key, nar_class in JRA_TO_NAR_TRANSFER_CLASS.items():
+        if key in rc:
+            return CLASS_BASE_NAR[nar_class]
+    return None
+
+
 # ── NAR独自の大差負けペナルティ（着差ベース・要継続検証） ────────────────
 # JRA側のLARGE_MARGIN_PENALTYをそのまま流用していたが、ユーザー判断
 # （門別3R・ノーブルフェスタ vs セトノダイヤモンドの事後検証で発覚）
@@ -1059,6 +1116,7 @@ def calc_race_point_nar(
     weight_carried: float = 55.0,
     field_size: int = 0,
     penalty_discount: float = 0.0,
+    class_base_override: "float | None" = None,
 ) -> Optional[float]:
     """
     calculator.pyのcalc_race_point()と同一の計算式で、
@@ -1072,11 +1130,15 @@ def calc_race_point_nar(
     最下位圏ペナルティ）にのみ適用する割引率（1.0=全額免除）。地区転入時、
     格上地区（南関東等）での大敗を割り引くために使用する（v1.9〜）。
     フィニッシュボーナス・着差ボーナス・斤量補正には影響しない。
+    class_base_override: 指定時、get_class_base_nar(race_class)の代わりに
+    この値をクラス基準値として使う（v3.10追加）。JRA転入馬のJRA時代の
+    過去走を採点する際、JRA内部のクラス階層（未勝利=95等）ではなく、
+    地方競馬側の実際の受け入れクラス格付けで評価したい場合に使用する。
     """
     if finish <= 0:
         return None
 
-    base = get_class_base_nar(race_class)
+    base = class_base_override if class_base_override is not None else get_class_base_nar(race_class)
     fin_bonus = FINISH_BONUS.get(finish, FINISH_BONUS_DEFAULT)
 
     margin_bonus = 0.0
@@ -1223,7 +1285,18 @@ def calc_phase1_nar(
         )
         discount = TOUGHER_REGION_PENALTY_DISCOUNT if is_discounted else 0.0
 
-        pt = calc_race_point_nar(pr.finish, gap, pr.race_class, pr.weight_carried, fs, penalty_discount=discount)
+        # v3.10追加：JRA時代の過去走（is_local=False）は、JRA内部の
+        # クラス階層ではなく、地方側の実際の受け入れクラス格付け
+        # （未勝利→C等）で採点する。該当マップに無いクラス（重賞・Jpn等、
+        # 既にNAR側と揃っている）はNoneが返り、通常のget_class_base_nar()
+        # にフォールバックする。
+        _class_base_override = None
+        if not getattr(pr, "is_local", True):
+            _class_base_override = get_jra_transfer_class_base(pr.race_class)
+
+        pt = calc_race_point_nar(pr.finish, gap, pr.race_class, pr.weight_carried, fs,
+                                  penalty_discount=discount,
+                                  class_base_override=_class_base_override)
         if pt is not None:
             race_points.append(pt)
             if is_discounted:
