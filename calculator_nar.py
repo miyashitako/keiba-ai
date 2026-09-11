@@ -37,7 +37,43 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.11-dist_bonus_recency_decay"
+__version__ = "3.13-dist_bonus_class_gap_discount"
+
+# ── v3.13（2026/9/9）：距離好走ボーナスへのクラス格差ディスカウント ─────
+# ユーザー指摘（門別7R オギフシノチカイ・バイデントの事例）：v3.12で
+# C1〜C4の格差を正しく区別できるようになったが、距離好走ボーナス自体は
+# まだクラスを一切見ておらず、「今回よりずっと格下のクラスでの好走」が
+# 満額評価されたままだった（例：バイデントはC3/C4クラスでの好走はあるが、
+# 実際にC1で走った際は5着に終わっている＝C1レベルでは通用しない実績が
+# 既にあるにも関わらず、モデルはC3/C4での好走を根拠に距離好走ボーナスを
+# 満額付与していた）。
+# calc_distance_aptitude_bonus()（calculator.py）にclass_base_fn／
+# current_class_base／class_gap_discount_per_pt引数を追加。候補となる
+# 過去走のクラス基準値が今回より大きい（＝格下）場合、その差1ptにつき
+# 15%（暫定値・要検証）ずつボーナスを割り引く（差4.0pt＝1階級分で60%減、
+# 差6.7pt超で0）。格上での好走は割引なし（従来通り満額）。
+# NAR側のみ有効化（class_base_fn=get_class_base_narを渡す）。JRA側は
+# class_base_fn未指定＝従来通り無変更。
+# 検証：C4での1着(今回C1、3pt差) 8.9pt→4.895pt(0.55倍)。
+
+# ── v3.12（2026/9/9）：クラス内「数字区分」（A1〜A4等）の格差を追加 ──────
+# ユーザー提供のNAR公式資料（keiba.go.jp/beginner、各競馬場のクラス・組
+# 一覧）により、地方競馬のクラス表記は「クラス+数字（例：門別A1〜A4）＝
+# それ自体が独立した格付け」「組（－1/一組/(一)等）＝その中のさらに
+# 細かい実力別グループ」という2階層構造であることが判明。従来の
+# get_class_base_nar()はクラス+数字の「数字」部分を完全に無視しており、
+# "C1"も"C4"も同じ92.0として扱われていた（門別7Rオギフシノチカイ・
+# バイデントの事例：C3/C4クラスでの好走が今回のC1と同格に評価され、
+# 格上挑戦除外も発動しないまま距離好走ボーナスが満額適用されていた）。
+# extract_class_tier_digit()を新設し、CLASS_DIGIT_STEP_NAR=1.0pt/段差
+# （暫定値・要検証）で数字区分を反映するよう修正。名古屋"B10組"のような
+# 組表記との混同を避けるロジック込み。
+#
+# 注意：この修正はability_avg・昇級勢い・格上挑戦除外には自動的に反映
+# されるが、距離好走ボーナス（calc_distance_aptitude_bonus）は現状
+# クラスを一切見ていないため、まだ「格下クラスでの好走の過大評価」問題
+# 自体は解消していない。次のタスクとして、距離好走ボーナスの候補選定に
+# クラス差ディスカウントを組み込むことを検討中（未着手）。
 
 # ── v3.11（2026/9/9）：距離好走ボーナスへの時系列減衰導入 ──────────────
 # ユーザー指摘：距離好走ボーナスが再キャリブレーションで物理的にありえない
@@ -527,6 +563,54 @@ def get_region_nar(venue: str) -> str:
 # 4.0/10 ≒ 0.4pt/組 を目安に設定（暫定値・要検証）。
 KUMI_STEP_NAR = 0.4
 
+# ── クラス内「数字区分」補正（v3.12追加）───────────────────────────
+# ユーザー提供のNAR公式ページ一覧（keiba.go.jp/beginner、各競馬場の
+# 「一般」クラス・組表記）により判明：地方競馬のクラス表記は
+#   ① クラス+数字（例：門別のA1〜A4、B1〜B4、C1〜C4）＝それ自体が
+#      独立した格付け（笠松・名古屋のような「A/B/Cのみ・数字なし」の
+#      競馬場もある）
+#   ② 組（－1/－2、一組/二組、(一)/(二)等）＝①の中でのさらに細かい
+#      実力別グループ
+# の2階層構造になっている。従来のget_class_base_nar()は①の数字部分を
+# 完全に無視し、"C1"も"C4"も同じCLASS_BASE_NAR["C"]=92.0として扱って
+# いた（例：get_class_base_nar("C1")==get_class_base_nar("C4")==92.0）。
+# これが、格下クラス（C3/C4）での好走が今回のクラス（C1）での好走と
+# 同格に評価されてしまう問題の直接の原因だった（2026/9/9・門別7R
+# オギフシノチカイ・バイデントの事例）。
+#
+# CLASS_DIGIT_STEP_NAR：①の数字1段階あたりの格差をポイント換算した値。
+# A/B/C間の格差4.0ptと同程度の重みを持たせるにはやや広すぎる（門別は
+# 最大4段階=1文字あたり最大3段差）と考え、組（KUMI_STEP_NAR=0.4）より
+# 明確に重く、A/B/C間（4.0pt）よりは軽い中間的な値として1.0pt/段差を
+# 暫定的に採用する（暫定値・要検証。recalibrate.pyでの追加検証が必要）。
+CLASS_DIGIT_STEP_NAR = 1.0
+
+def extract_class_tier_digit(race_class: str) -> Optional[int]:
+    """
+    A/B/Cクラス表記に直接くっついた「数字区分」（門別のA1〜A4、
+    B1〜B4、C1〜C4等）を抽出する（v3.12追加）。組番号（例：名古屋
+    "B10組"の"10"、佐賀"C1-14組"の"-14"部分）とは別物として扱う必要が
+    あるため、以下の場合は数字区分として抽出しない（＝組番号側の
+    ロジックに委ねる）：
+      - 数字の直後に（0文字以上の追加数字を挟んで）"組"が続く場合
+        （名古屋スタイル"B10組"："1"も"10"も組番号なので除外）
+      - 数字の直後に英数字が続く場合（誤検出防止の境界チェック）
+    ハイフン+組数字（例："C4-3"）や、組数字が漢数字で直接くっつく
+    形（例：兵庫"C3一"）は、ハイフンや漢数字が[0-9]にマッチしないため
+    数字区分の抽出を妨げない（＝"C4-3"からは"4"を、"C3一"からは"3"を
+    正しく数字区分として抽出できる）。
+    見つからない場合はNoneを返す（笠松・名古屋のような数字なしクラス、
+    または名古屋"B10組"のように数字が組番号として消費される場合）。
+    """
+    if not race_class:
+        return None
+    rc = unicodedata.normalize("NFKC", race_class)
+    m = re.search(r'(?<![A-Za-z0-9])[ABC]([0-9]{1,2})(?!\d*組)(?![A-Za-z0-9])', rc)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
 _KANJI_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
     "六": 6, "七": 7, "八": 8, "九": 9,
@@ -791,6 +875,9 @@ def get_class_base_nar(race_class: str) -> float:
     kumi = extract_fine_tier(rc_norm)
     kumi_adjust = (kumi - 1) * KUMI_STEP_NAR if kumi else 0.0
 
+    tier_digit = extract_class_tier_digit(rc_norm)
+    tier_adjust = (tier_digit - 1) * CLASS_DIGIT_STEP_NAR if tier_digit else 0.0
+
     # ③ 複数クラス混走判定（例："AB混合"）
     # 高知の実データで確認。"A"と"B"が隣接するため、後段の_match_local_class
     # （前後に英数字が来ないことを要求する境界チェック）ではどちらの
@@ -829,11 +916,11 @@ def get_class_base_nar(race_class: str) -> float:
         return bool(re.search(pattern, rc_norm, re.IGNORECASE)) or f"{letter}級" in rc_norm
 
     if _match_local_class("A"):
-        return CLASS_BASE_NAR["A"] + kumi_adjust
+        return CLASS_BASE_NAR["A"] + kumi_adjust + tier_adjust
     if _match_local_class("B"):
-        return CLASS_BASE_NAR["B"] + kumi_adjust
+        return CLASS_BASE_NAR["B"] + kumi_adjust + tier_adjust
     if _match_local_class("C"):
-        return CLASS_BASE_NAR["C"] + kumi_adjust
+        return CLASS_BASE_NAR["C"] + kumi_adjust + tier_adjust
 
     # ④ 馬齢限定戦判定：
     #   - "フレッシュ"（新馬戦相当）→ 未勝利より実績が乏しいため個別に高めの基準値
@@ -1259,8 +1346,11 @@ def calc_phase1_nar(
     # 隣接クラス（例：A→B、4pt差）だけで即除外されてしまい厳しすぎるため、
     # NARでは閾値を1ラダー分（4.0pt）に緩める。
     OVERCLASS_THRESHOLD_NAR = 4.0
+    # v3.13：current_baseは距離好走ボーナスのクラス格差ディスカウント
+    # （後述）でも使うため、current_class未指定時もCLASS_BASE_NAR_DEFAULT
+    # にフォールバックする形で常に計算しておく。
+    current_base = get_class_base_nar(current_class) if current_class else CLASS_BASE_NAR_DEFAULT
     if current_class and past_races:
-        current_base = get_class_base_nar(current_class)
         non_overclass = []
         overclass_excluded = 0
         for pr in past_races:
@@ -1466,6 +1556,8 @@ def calc_phase1_nar(
             bonus_table=NAR_DIST_GOOD_FINISH_BONUS,
             margin_thresholds=NAR_DIST_BONUS_MARGIN_THRESHOLDS,
             recency_weights=DIST_BONUS_RECENCY_WEIGHTS,  # v3.11追加：時系列減衰
+            class_base_fn=get_class_base_nar,            # v3.13追加：クラス格差割引
+            current_class_base=current_base,
         )
         # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
         # 追加の交互作用効果がrecalibrate.pyで確認されたため、該当馬には

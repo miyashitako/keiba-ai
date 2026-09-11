@@ -913,6 +913,21 @@ def calc_distance_aptitude_bonus(
                                       # 育ってしまった原因が「何走前の好走でも
                                       # 同じ満額」だったことに起因すると判断し、
                                       # v3.11でこの引数を渡すよう変更）。
+    class_base_fn: "callable | None" = None,  # v3.13追加：race_class文字列→
+                                      # クラス基準値を返す関数（NAR側は
+                                      # get_class_base_narを渡す）。calculator.py
+                                      # はNAR固有関数に依存できないため、
+                                      # 呼び出し側からコールバックとして注入
+                                      # する。Noneなら格差ディスカウントなし
+                                      # （JRA側の挙動は不変）。
+    current_class_base: float = None,  # v3.13追加：今回レースのクラス基準値
+                                      # （class_base_fn使用時に必須）。
+    class_gap_discount_per_pt: float = 0.15,  # v3.13追加：候補の過去走が
+                                      # 今回より格下だった場合、その基準値差
+                                      # 1ptにつきこの割合だけ距離好走ボーナスを
+                                      # 割り引く（暫定値・要検証）。差4.0pt
+                                      # （A/B/C間の1階級分）で60%減、差6.7pt
+                                      # 超で0（全額無効）となる計算。
 ) -> tuple[float, str]:
     """
     距離適性ボーナスを計算して返す（v1.0改訂）。
@@ -924,14 +939,15 @@ def calc_distance_aptitude_bonus(
     ④ スタミナ証明（今回距離+400m超の完走実績）
     ⑤ 芝ダ違いペナルティ（今回と異なる芝ダの走しかない場合）
 
-    recency_weights指定時（v1.10）：
+    recency_weights・class_base_fn指定時（v1.10／v3.13）：
     ①②の対象候補（±800m以内・3着以内の全過去走）それぞれについて
-    「基礎ボーナス×距離近さ係数×着差係数×時系列減衰」を計算し、
-    その中で実効ボーナスが最大になる1走を採用する。無減衰時は
-    「最も着順が良い（同着順なら距離が近い）1走」を機械的に選んでいた
-    が、これだと大昔の好走が直近の僅差2着より優先されてしまうため、
-    減衰込みの実効値で選び直す必要がある（同じ最大値が複数あれば
-    より直近のものを優先）。
+    「基礎ボーナス×距離近さ係数×着差係数×時系列減衰×クラス格差ディス
+    カウント」を計算し、その中で実効ボーナスが最大になる1走を採用する。
+    無指定時は「最も着順が良い（同着順なら距離が近い）1走」を機械的に
+    選んでいたが、これだと①大昔の好走が直近の僅差2着より優先される、
+    ②今回よりずっと格下のクラスでの好走が今回と同格として満額評価
+    される、という2つの問題があったため（ユーザー指摘、2026/9/9・
+    門別7Rの事例）、減衰・格差込みの実効値で選び直す。
     """
     # past_racesが空でもall_past_racesがあれば芝ダ初挑戦判定のために処理継続
     _has_any_races = past_races or (all_past_races is not None and all_past_races)
@@ -957,8 +973,16 @@ def calc_distance_aptitude_bonus(
                 return scale
         return 0.0
 
-    if recency_weights:
-        # ── 時系列減衰あり：候補全体から実効ボーナス最大の1走を選ぶ
+    def _class_discount_of(pr) -> float:
+        if class_base_fn is None or current_class_base is None:
+            return 1.0
+        pr_base = class_base_fn(pr.race_class)
+        gap = max(0.0, pr_base - current_class_base)   # 格下だった分のみ（格上なら0＝割引なし）
+        return max(0.0, 1.0 - gap * class_gap_discount_per_pt)
+
+    if recency_weights or class_base_fn is not None:
+        # ── 時系列減衰・クラス格差ディスカウントあり：
+        #    候補全体から実効ボーナス最大の1走を選ぶ
         candidates = []
         for idx, pr in enumerate(past_races):
             if abs(pr.distance - target_distance) >= 800 or not (1 <= pr.finish <= 3):
@@ -967,16 +991,23 @@ def calc_distance_aptitude_bonus(
             dist_diff = abs(pr.distance - target_distance)
             closeness = 1.0 if dist_diff <= 400 else 0.5
             m_scale = _margin_scale_of(pr)
-            decay = recency_weights[idx] if idx < len(recency_weights) else recency_weights[-1]
-            eff = round(base * closeness * m_scale * decay, 3)
-            candidates.append((eff, idx, pr, m_scale, decay))
+            decay = 1.0
+            if recency_weights:
+                decay = recency_weights[idx] if idx < len(recency_weights) else recency_weights[-1]
+            class_discount = _class_discount_of(pr)
+            eff = round(base * closeness * m_scale * decay * class_discount, 3)
+            candidates.append((eff, idx, pr, m_scale, decay, class_discount))
         if candidates:
             # 実効ボーナス最大を優先、同値ならより直近（idxが小さい）を優先
             candidates.sort(key=lambda c: (-c[0], c[1]))
-            good_finish_bonus, _best_idx, best_pr, best_m_scale, best_decay = candidates[0]
+            good_finish_bonus, _best_idx, best_pr, best_m_scale, best_decay, best_class_discount = candidates[0]
             if good_finish_bonus > 0:
-                decay_note = f"・減衰{best_decay:.2f}" if best_decay < 1.0 else ""
-                best_finish_label = f"距離好走{best_pr.finish}着:{good_finish_bonus:+.3f}{decay_note}"
+                suffix = ""
+                if best_decay < 1.0:
+                    suffix += f"・減衰{best_decay:.2f}"
+                if best_class_discount < 1.0:
+                    suffix += f"・格差割引{best_class_discount:.2f}"
+                best_finish_label = f"距離好走{best_pr.finish}着:{good_finish_bonus:+.3f}{suffix}"
             elif best_m_scale == 0.0 and _table.get(best_pr.finish, 0.0) > 0:
                 best_finish_label = f"距離{best_pr.finish}着(着差大無効)"
         return _apply_stamina_and_surface_penalty(
