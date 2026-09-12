@@ -913,12 +913,23 @@ def calc_distance_aptitude_bonus(
                                       # 育ってしまった原因が「何走前の好走でも
                                       # 同じ満額」だったことに起因すると判断し、
                                       # v3.11でこの引数を渡すよう変更）。
-    class_base_fn: "callable | None" = None,  # v3.13追加：race_class文字列→
-                                      # クラス基準値を返す関数（NAR側は
-                                      # get_class_base_narを渡す）。calculator.py
-                                      # はNAR固有関数に依存できないため、
-                                      # 呼び出し側からコールバックとして注入
-                                      # する。Noneなら格差ディスカウントなし
+    class_base_fn: "callable | None" = None,  # v3.13追加、v3.14でシグネチャ
+                                      # 変更：(race_class: str, is_local: bool)
+                                      # → クラス基準値を返す関数（NAR側は
+                                      # is_local=Falseの場合get_jra_transfer_
+                                      # class_baseを優先するラッパーを渡す）。
+                                      # calculator.pyはNAR固有関数に依存できない
+                                      # ため、呼び出し側からコールバックとして
+                                      # 注入する。is_local引数が必要な理由：
+                                      # v3.13当初はrace_classのみを渡していた
+                                      # ため、JRA転入馬の過去走がJRA内部の
+                                      # クラス階層（例：未勝利=95）で評価され、
+                                      # v3.10で直したはずの問題（未勝利は地方
+                                      # 受け入れ上Cクラス=92相当）が距離好走
+                                      # ボーナスの格差割引側で再発していた
+                                      # （ユーザー指摘、2026/9/9・門別7Rの
+                                      # ハッピーローヴァーの事例）。
+                                      # Noneなら格差ディスカウントなし
                                       # （JRA側の挙動は不変）。
     current_class_base: float = None,  # v3.13追加：今回レースのクラス基準値
                                       # （class_base_fn使用時に必須）。
@@ -976,7 +987,7 @@ def calc_distance_aptitude_bonus(
     def _class_discount_of(pr) -> float:
         if class_base_fn is None or current_class_base is None:
             return 1.0
-        pr_base = class_base_fn(pr.race_class)
+        pr_base = class_base_fn(pr.race_class, getattr(pr, "is_local", True))
         gap = max(0.0, pr_base - current_class_base)   # 格下だった分のみ（格上なら0＝割引なし）
         return max(0.0, 1.0 - gap * class_gap_discount_per_pt)
 
