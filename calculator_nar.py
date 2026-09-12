@@ -37,7 +37,41 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.13-dist_bonus_class_gap_discount"
+__version__ = "3.15-ability_avg_extended_window"
+
+# ── v3.15（2026/9/10）：通常の成績(ability_avg)の参照窓を3走→6走に拡大 ──
+# ユーザー指摘（川崎8R女郎花賞 マルモリアクティブの事例）：3人気1着馬が
+# 予想7位、10人気9着・12人気11着の馬より下位という、システムの設計思想
+# （こうすけ氏本人の予想と一致させる）に反する結果になっていた。タグ
+# 内訳では説明がつかず、実際の直近3走データを見た結果、上位評価されて
+# いた馬（エスジースパークル）の2走前2着（FINISH_BONUS=5.0、重み30%）が
+# 1走前13着の大敗を打ち消すテコになっていたことが判明。直近3走だけで
+# 打ち切る設計だと、古い1回の好走が加重平均を持ち上げすぎる一方、直近の
+# 大敗が决定力を持てない。
+# ユーザー方針（競馬新聞の馬柱は過去5走掲載、NARでは5〜7走より遡っても
+# 意味が薄い）に基づき、6走を採用。NAR_ABILITY_AVG_WINDOW=6、
+# WEIGHT_RECENT_EXTENDED_NAR=[0.5,0.3,0.2,0.13,0.09,0.06]（先頭3つは
+# 旧WEIGHT_RECENTと完全一致＝3走以下の馬は今までと同じ値。4〜6走目は
+# 同程度の減衰比で追加。暫定値・要検証）。targets=past_races[:3]→
+# past_races[:NAR_ABILITY_AVG_WINDOW]に変更。JRA側（calculator.py）は
+# 今回未変更。
+
+# ── v3.14（2026/9/9）：距離好走ボーナスのクラス格差割引にJRA転入補正を適用 ──
+# ユーザー指摘（門別7R ハッピーローヴァーの事例）：v3.13のクラス格差割引が、
+# v3.10で直したはずの問題（JRA時代の「未勝利」等を、地方受け入れ格付け
+# ではなくJRA内部の階層のまま評価してしまう）を別の場所で再発させていた。
+# ハッピーローヴァーの未勝利2着（本来は今回のC1と同格＝gap=0のはず）が、
+# 生のget_class_base_nar("未勝利")=95を使ったせいでgap=3.0と誤判定され、
+# 45%も距離好走ボーナスを割り引かれていた。
+# calc_distance_aptitude_bonus()のclass_base_fnシグネチャを
+# (race_class)→(race_class, is_local)に変更し、新設の
+# get_class_base_nar_for_dist_bonus()（is_local=False時はget_jra_transfer_
+# class_baseを優先）を渡すよう修正。検証：同条件で格差割引0.55→割引なし
+# （gap=0）に修正されたことを確認。
+# 教訓：JRA転入馬関連の新しい仕組みを追加するたびに、get_class_base_nar()を
+# 個別の過去走に対して直接呼んでいないか確認すること（calc_race_point_nar
+# のv3.10に続き、これで2回目の再発）。calc_momentum_bonus_nar・格上挑戦
+# 除外ロジックはまだ未対応で、同じ問題を抱えている可能性が高い。
 
 # ── v3.13（2026/9/9）：距離好走ボーナスへのクラス格差ディスカウント ─────
 # ユーザー指摘（門別7R オギフシノチカイ・バイデントの事例）：v3.12で
@@ -471,6 +505,25 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 8.0
 #     まだ小さい。次回はv3.8の着差大無効撤去で距離好走タグの母集団自体が
 #     変わるため、今回は静観し次回のデータで改めて判断する。
 NAR_DIST_GOOD_FINISH_BONUS = {1: 8.9, 2: 6.3, 3: 2.5}
+
+# ── 通常の成績（ability_avg）の参照窓拡大＋時系列減衰（v3.15追加）───────
+# 従来はtargets=past_races[:3]・WEIGHT_RECENT=[0.5,0.3,0.2]で「直近3走で
+# 打ち切り、それ以降は完全無視」という設計だった。これだと、たまたま
+# 2走前に1回好走が混じるだけで加重平均（重み30%）が大きく持ち上がって
+# しまい、逆に直近1走の大敗も重み50%では決定力に欠ける、という問題が
+# あった（ユーザー指摘の実例：2026/9/10・川崎8R女郎花賞、エスジー
+# スパークルの2走前2着がテコになり、直近1走大敗・近走不振ペナルティ
+# 込みでも最終的にマルモリアクティブ（4走前まで見れば同等以下の内容）
+# より上位評価されてしまっていた）。
+# ユーザー方針：競馬新聞の馬柱が過去5走を載せているのに倣い、5〜7走
+# あたりまで遡るのが妥当（NARではそれ以上遡っても、例えば1年以上前の
+# 成績まで見る意味は薄い）。中間を取って6走を採用。
+# 直近3走の重みは既存のWEIGHT_RECENT=[0.5,0.3,0.2]をそのまま維持し
+# （3走以下しか無い馬のability_avgは従来と完全に同じ値になる）、
+# 4〜6走目は同程度の比率（減衰比おおよそ0.65〜0.67）で継続して減衰させる
+# 値を追加した（暫定値・要検証）。
+NAR_ABILITY_AVG_WINDOW = 6
+WEIGHT_RECENT_EXTENDED_NAR = [0.5, 0.3, 0.2, 0.13, 0.09, 0.06]
 
 # v3.8：ユーザーの実戦知見（NARでは着差が大きくても直近2・3着なら上位に
 # 来やすい傾向がある）に基づき、JRA側のDIST_BONUS_MARGIN_THRESHOLDS
@@ -979,6 +1032,23 @@ def get_jra_transfer_class_base(race_class: str) -> "float | None":
     return None
 
 
+def get_class_base_nar_for_dist_bonus(race_class: str, is_local: bool) -> float:
+    """
+    距離好走ボーナスのclass_base_fn用ラッパー（v3.14追加）。
+    JRA時代の過去走（is_local=False）は、地方側の実際の受け入れ格付け
+    （get_jra_transfer_class_base：未勝利→C等）を優先し、該当しない
+    （重賞・Jpn等）場合のみ通常のget_class_base_narにフォールバックする。
+    NARの過去走（is_local=True）は常に通常のget_class_base_narを使う。
+    calc_race_point_nar側のclass_base_override（v3.10）と同じ考え方を、
+    距離好走ボーナスの格差割引（v3.13）にも一貫して適用するための関数。
+    """
+    if not is_local:
+        transfer_base = get_jra_transfer_class_base(race_class)
+        if transfer_base is not None:
+            return transfer_base
+    return get_class_base_nar(race_class)
+
+
 # ── NAR独自の大差負けペナルティ（着差ベース・要継続検証） ────────────────
 # JRA側のLARGE_MARGIN_PENALTYをそのまま流用していたが、ユーザー判断
 # （門別3R・ノーブルフェスタ vs セトノダイヤモンドの事後検証で発覚）
@@ -1365,7 +1435,8 @@ def calc_phase1_nar(
             past_races_all = list(past_races)
             result.note = (result.note + f" [格上挑戦除外{overclass_excluded}走]").strip()
 
-    # ── 各走のポイント計算（最大3走）
+    # ── 各走のポイント計算（最大6走。v3.15で3→6に拡大、詳細は
+    #    NAR_ABILITY_AVG_WINDOWのコメント参照）
     # 注意：NARのdb.netkeiba.comページはwinner_time_sec（勝ち馬タイム）の
     # スクレイピングが信頼できないことが実データ検証で判明した
     # （例：ダ1400mで68.2秒のようなあり得ない値が入る）。
@@ -1374,7 +1445,7 @@ def calc_phase1_nar(
     # の再計算を行わず、marginを直接信頼する。
     # （JRA版calc_phase1のようにwinner_time_secから差分を再計算する
     #   ロジックは採用しない）
-    targets = past_races[:3]
+    targets = past_races[:NAR_ABILITY_AVG_WINDOW]
     race_points = []
     penalty_notes = []
     discounted_race_count = 0
@@ -1443,7 +1514,7 @@ def calc_phase1_nar(
         result.phase1_score = 9999.0
         return result
 
-    weights = WEIGHT_RECENT[: result.valid_runs]
+    weights = WEIGHT_RECENT_EXTENDED_NAR[: result.valid_runs]
     total_w = sum(weights)
     ability_avg = sum(p * w for p, w in zip(race_points, weights)) / total_w
     result.ability_avg  = round(ability_avg, 3)
@@ -1556,7 +1627,7 @@ def calc_phase1_nar(
             bonus_table=NAR_DIST_GOOD_FINISH_BONUS,
             margin_thresholds=NAR_DIST_BONUS_MARGIN_THRESHOLDS,
             recency_weights=DIST_BONUS_RECENCY_WEIGHTS,  # v3.11追加：時系列減衰
-            class_base_fn=get_class_base_nar,            # v3.13追加：クラス格差割引
+            class_base_fn=get_class_base_nar_for_dist_bonus,  # v3.14：JRA転入馬対応版に差し替え
             current_class_base=current_base,
         )
         # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
