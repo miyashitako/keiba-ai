@@ -4,7 +4,24 @@ Phase1〜Phase4 を固定数式で計算する
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.1-jra_recalibration_v8_full_sample_confirmed"
+__version__ = "2.2-jra_dist_bonus_recency_decay"
+
+# ── v2.2（2026/9/14）：JRA距離好走ボーナスへの時系列減衰導入 ────────────
+# ユーザー指摘（ローズS事例）：距離好走ボーナス（現行1着6.5pt）が、NAR側
+# （v3.11で導入済み）と違いJRAでは減衰なしのまま満額適用され続けていた。
+# 春の実績馬が長期休養明けでも距離好走ボーナスが減衰せず、上り馬（今回
+# 実際の1〜3着）より予想上位に来てしまう一因になっていた。
+# NARで検証済みのDIST_BONUS_RECENCY_WEIGHTS（calc_grade_bonusの
+# TIME_WEIGHTSと同じ考え方・同じ値）をJRA側のcalc_distance_aptitude_bonus
+# 呼び出しにも渡すよう変更。これにより、①②の候補選定も「最も着順が良い
+# 1走」から「減衰込みの実効ボーナスが最大の1走」に切り替わる（calculator.py
+# のcalc_distance_aptitude_bonus本体はv1.10で既にrecency_weights引数に
+# 対応済みのため、呼び出し側の変更のみで反映される）。
+# 注意：この減衰は「何走前か」という走数ベースであり、「何日休んだか」と
+# いうカレンダー時間は見ていない。長期休養明けでも直前の1走がそのまま
+# 「直近走」として扱われるため、今回のタイセイボーグのような「半年休んで
+# 一度も使われていない」ケースの根本的な鮮度評価は、この修正だけでは
+# 解決しない（別途、長期休養の扱いとして検討予定）。
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -1931,6 +1948,15 @@ def calc_phase1(
             target_surface=target_surface,
             all_past_races=_all_for_interval,  # 芝ダフィルター前の全走
             bonus_table=JRA_DIST_GOOD_FINISH_BONUS,
+            recency_weights=DIST_BONUS_RECENCY_WEIGHTS,  # v2.2追加：NARで
+                                       # 検証済みの時系列減衰をJRAにも適用
+                                       # （何走前の好走でも同じ満額という
+                                       # 問題は減衰なしのJRAにも同様に存在
+                                       # していた。2026/9/14・ローズS
+                                       # ユーザー指摘：春の実績馬が長期休養
+                                       # 明けでも距離好走が減衰せず満額の
+                                       # まま残り、上り馬より過大評価され
+                                       # ていた）。
         )
         result.phase1_score = round(result.phase1_score - dist_bonus, 3)
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)
