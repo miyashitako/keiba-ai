@@ -37,7 +37,24 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.15-ability_avg_extended_window"
+__version__ = "3.16-recent_form_window_isolated"
+
+# ── v3.16（2026/9/13）：近走不振の判定窓をability_avgの拡大から分離 ──
+# ユーザー指摘（門別7R ルクスドリーム、v3.15適用後に予想順位が再度悪化）：
+# 「JRA未勝利戦の成績（不振含む）もNARと同じ計算処理をしているのでは」と
+# いう疑問から調査。判明した実態：calc_recent_form_penalty_nar()自体は
+# クラス情報を一切見ておらず着順・着差のみで判定するため、JRA/NARの
+# 扱いに差はない。しかし、v3.15でability_avg用にtargets=past_races[:3]→
+# past_races[:NAR_ABILITY_AVG_WINDOW]（6走）に拡大した際、同じtargets
+# 変数がcalc_recent_form_penalty_nar()にもそのまま渡されていたため、
+# 近走不振の判定窓も意図せず3走→6走に広がっていた（ルクスドリームの
+# 4〜6走前のJRA成績のどれかが新たに「着外」と判定され、近走不振タグが
+# 新規発火していた）。近走不振は従来3走窓で調整されてきた指標であり、
+# ability_avgの窓拡大とは別の意思決定のため、form_pen計算の呼び出しを
+# calc_recent_form_penalty_nar(targets[:3])に変更し、明示的に3走に
+# 絞って渡すよう修正。ability_avg自体は引き続き6走を反映する。
+# 検証：直近3走が問題ない馬に4〜6走前の大敗を混ぜても、近走不振タグは
+# 発火せず（ability_avgのみ悪化）を確認。
 
 # ── v3.15（2026/9/10）：通常の成績(ability_avg)の参照窓を3走→6走に拡大 ──
 # ユーザー指摘（川崎8R女郎花賞 マルモリアクティブの事例）：3人気1着馬が
@@ -1260,8 +1277,9 @@ def calc_momentum_bonus_nar(
 
 def calc_recent_form_penalty_nar(targets: list) -> tuple:
     """
-    直近走（calc_phase1_narで使うtargetsと同一集合、最大3走）から、
-    着差込みでNAR独自の近走不振ペナルティを算出する。
+    直近3走（v3.16よりability_avg用のtargets（最大6走）とは独立して
+    明示的に3走に絞った集合）から、着差込みでNAR独自の近走不振ペナルティ
+    を算出する。
 
     戻り値：(ペナルティ値, ラベル文字列)。該当なしなら(0.0, "")。
     """
@@ -1542,7 +1560,15 @@ def calc_phase1_nar(
     # 無効化されていたことになる）。NAR_FORM_PENALTY_CAP自体に連動する
     # NAR_COMBINED_PENALTY_CAPとして定義し直し、今後定数を調整しても
     # 同じ問題が再発しないようにした。
-    form_pen, form_label = calc_recent_form_penalty_nar(targets)
+    form_pen, form_label = calc_recent_form_penalty_nar(targets[:3])
+    # v3.16修正：targetsをv3.15でability_avg用に6走へ拡大した際、
+    # calc_recent_form_penalty_nar()も同じtargets変数を受け取っていた
+    # ため、近走不振の判定窓も意図せず3走→6走に広がってしまっていた
+    # （ユーザー指摘：race_id=202630090907のルクスドリームに、4〜6走前の
+    # JRA成績のどれかが原因で新たに近走不振タグが付いた）。近走不振は
+    # 従来3走窓で調整されてきた指標であり、ability_avgの窓拡大とは
+    # 別の意思決定のため、targets[:3]で明示的に3走に絞って渡すことで
+    # 従来の挙動に戻す。
     # v3.4：昇級(前走非勝利)と同様、近走不振×低走数の交互作用が2期間連続
     # （round6: implied+2.32pt、round7: implied+2.43pt）で有意と確認できた
     # ため、該当馬には追加ペナルティを加算する（半分反映）。
