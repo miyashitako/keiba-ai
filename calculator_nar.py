@@ -37,7 +37,31 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.16-recent_form_window_isolated"
+__version__ = "3.17-overclass_discount_not_exclude"
+
+# ── v3.17（2026/9/14）：格上挑戦の扱いを「除外」から「ペナルティ免除」に変更 ──
+# ユーザー指摘（2026/9/13・水沢9R race_id=202636091309／12R
+# race_id=202636091312）：格上挑戦除外がかかった馬（サクラトップキッド・
+# ウインオーディン・アユツリー・パンセ等）ほど、実際には好走している
+# のに予想順位が低く出る現象が複数レースで確認された。原因：NARには
+# 「降格」という一般的な仕組みがあり、格上（重賞・OP・中央等）で通用
+# しなかった馬が下級クラスに回ってくること自体はごく普通のプロセスで、
+# 人気にもなるし実際に好走することが多い。従来は該当走をpast_races
+# から完全に除外していたため、格上での挑戦歴という情報自体（距離好走
+# ボーナスの対象走・ability_avgの母数等）が丸ごと失われていた。
+# 南関東の大敗ペナルティ免除（v1.9）と同じ「penalty_discountで大差負け・
+# 最下位圏ペナルティだけを免除する」方式に統一し、レース自体は
+# past_racesに残すよう変更。南関東割引と格上挑戦が両方該当する場合は
+# 二重に割り引かず、格上挑戦（全額免除）を優先。
+# note表示も「[格上挑戦除外N走]」→「[格上挑戦N走の大敗ペナルティ免除]」
+# に変更（analyze_predictions.pyの_TAG_PATTERNSはこの文字列を追跡
+# していないため、タグ検証への影響はない）。
+# 検証：格上(OP)で大敗した直近走を含む6走で計算したところ、valid_runs=6
+# （除外されず残存）、該当走の大差負け・最下位圏ペナルティは+0.0に
+# （全額免除）。
+# 注意：JRA側（calculator.py）の格上挑戦除外は今回未変更（従来通り
+# 完全除外方式のまま）。ユーザー指摘がNAR限定だったため。JRAにも同様の
+# 「降格」概念があるかは別途要検討。
 
 # ── v3.16（2026/9/13）：近走不振の判定窓をability_avgの拡大から分離 ──
 # ユーザー指摘（門別7R ルクスドリーム、v3.15適用後に予想順位が再度悪化）：
@@ -1429,7 +1453,7 @@ def calc_phase1_nar(
         if races_surf:
             past_races = races_surf
 
-    # ── 格上挑戦除外
+    # ── 格上挑戦のペナルティ免除（v3.17：除外方式から割引方式に変更）
     # NARのクラスラダーはOP/A/B/Cの4pt刻み。JRAの2.0pt閾値だと
     # 隣接クラス（例：A→B、4pt差）だけで即除外されてしまい厳しすぎるため、
     # NARでは閾値を1ラダー分（4.0pt）に緩める。
@@ -1438,20 +1462,25 @@ def calc_phase1_nar(
     # （後述）でも使うため、current_class未指定時もCLASS_BASE_NAR_DEFAULT
     # にフォールバックする形で常に計算しておく。
     current_base = get_class_base_nar(current_class) if current_class else CLASS_BASE_NAR_DEFAULT
+    # v3.17修正：従来はis_overclass該当レースをpast_races自体から完全に
+    # 除外していたが、これだと「南関東1走の大敗ペナルティ免除」との扱いが
+    # 非対称だった。NARには降格（格上・重賞・中央等で通用しなかった馬が
+    # 下級クラスに回ってくる）という一般的な仕組みがあり、格上での大敗は
+    # 「今回のクラスでの評価としては参考にしない（＝大差負け・最下位圏
+    # ペナルティを免除する）」べきだが、レース自体を消してしまうと、
+    # 距離好走ボーナスの対象走・ability_avgの母数・中央転入判定等、他の
+    # 全ての計算からもその走の情報が失われてしまう（ユーザー指摘：
+    # 2026/9/13・水沢9R/12R、格上挑戦除外がかかった馬ほど、実際には
+    # 好走しているのに予想順位が低く出る現象が複数レースで確認された）。
+    # 南関東割引と同じ「penalty_discountで大差負け・最下位圏ペナルティ
+    # だけを免除する」方式に統一し、レース自体はpast_racesに残す。
+    overclass_by_race = {}
     if current_class and past_races:
-        non_overclass = []
-        overclass_excluded = 0
         for pr in past_races:
             pr_base = get_class_base_nar(pr.race_class)
-            is_overclass = (current_base - pr_base) >= OVERCLASS_THRESHOLD_NAR and pr.finish >= 6
-            if is_overclass:
-                overclass_excluded += 1
-            else:
-                non_overclass.append(pr)
-        if overclass_excluded > 0 and non_overclass:
-            past_races = non_overclass
-            past_races_all = list(past_races)
-            result.note = (result.note + f" [格上挑戦除外{overclass_excluded}走]").strip()
+            overclass_by_race[id(pr)] = (
+                (current_base - pr_base) >= OVERCLASS_THRESHOLD_NAR and pr.finish >= 6
+            )
 
     # ── 各走のポイント計算（最大6走。v3.15で3→6に拡大、詳細は
     #    NAR_ABILITY_AVG_WINDOWのコメント参照）
@@ -1467,6 +1496,7 @@ def calc_phase1_nar(
     race_points = []
     penalty_notes = []
     discounted_race_count = 0
+    overclass_discounted_count = 0
     raw_pen_total = 0.0  # 近走不振キャップ判定用：割引前の生ペナルティ合計
     for pr in targets:
         gap = 0.0 if pr.finish == 1 else pr.margin
@@ -1482,7 +1512,15 @@ def calc_phase1_nar(
             and pr_region in TOUGHER_REGIONS_NAR
             and pr_region != target_region_for_discount
         )
-        discount = TOUGHER_REGION_PENALTY_DISCOUNT if is_discounted else 0.0
+        is_overclass = overclass_by_race.get(id(pr), False)
+        # v3.17：南関東割引・格上挑戦のどちらか該当すれば割引（両方該当でも
+        # 二重には割り引かない。格上挑戦は全額免除、南関東単独ならその割引率）。
+        if is_overclass:
+            discount = 1.0
+        elif is_discounted:
+            discount = TOUGHER_REGION_PENALTY_DISCOUNT
+        else:
+            discount = 0.0
 
         # v3.10追加：JRA時代の過去走（is_local=False）は、JRA内部の
         # クラス階層ではなく、地方側の実際の受け入れクラス格付け
@@ -1498,10 +1536,12 @@ def calc_phase1_nar(
                                   class_base_override=_class_base_override)
         if pt is not None:
             race_points.append(pt)
-            if is_discounted:
+            if is_discounted and not is_overclass:
                 discounted_race_count += 1
+            if is_overclass:
+                overclass_discounted_count += 1
 
-            discount_tag = "・南関東割引" if is_discounted and discount > 0 else ""
+            discount_tag = "・南関東割引" if (is_discounted and not is_overclass and discount > 0) else ("・格上免除" if is_overclass else "")
             if pr.finish >= 6 and gap > NAR_LARGE_MARGIN_TRIGGER:
                 for threshold, pen in NAR_LARGE_MARGIN_PENALTY:
                     if gap > threshold:
@@ -1526,6 +1566,8 @@ def calc_phase1_nar(
         result.note = (result.note + " [" + "/".join(penalty_notes) + "]").strip()
     if discounted_race_count > 0:
         result.note = (result.note + f" [地区転入(南関東{discounted_race_count}走の大敗ペナルティ免除)]").strip()
+    if overclass_discounted_count > 0:
+        result.note = (result.note + f" [格上挑戦{overclass_discounted_count}走の大敗ペナルティ免除]").strip()
 
     if result.valid_runs == 0:
         result.note = (result.note + " 有効な走行データなし").strip()
