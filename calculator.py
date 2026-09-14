@@ -4,7 +4,54 @@ Phase1〜Phase4 を固定数式で計算する
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.2-jra_dist_bonus_recency_decay"
+__version__ = "2.5-rest_index_offset"
+
+# ── v2.5（2026/9/14）：長期休養時の時系列減衰index前倒し（設計案B） ──
+# ローズS（タイセイボーグ196日休養）の事例を受けた設計議論の結論：
+# 格B（馬齢限定戦モード）・距離好走ボーナスの時系列減衰は「何走前か」
+# （走数ベース）であり「何日休んだか」（カレンダー時間）を見ていないため、
+# 長期休養明けでも直前の1走がそのまま「直近走」として満額に近い評価が
+# 残ってしまっていた。
+# 案A（休養ペナルティ自体を段階化）・案B（減衰indexを前倒し）・案C（減衰
+# 軸を走数からカレンダー日数に全面置換）を比較し、まずBを実装して再
+# キャリブレーションで様子を見る方針に。
+# calc_grade_bonus()・calc_distance_aptitude_bonus()にindex_offset引数を
+# 追加（両方ともデフォルト0＝無効、既存呼び出しは無変更）。calc_phase1側
+# で112日超の長期休養を検知した場合のみ_rest_index_offset=1を計算し、
+# 両関数に渡す（減衰配列参照時にidx+offsetを使う）。
+# 検証：休養明け(196日)は格B=-0.7→-0.5、距離好走(減衰0.70→0.50)と、
+# 両方とも1段階分古い扱いになることを確認。
+# 暫定値：オフセットは常に+1固定（休養日数による段階化はまだ無し）。
+# 再キャリブレーションの結果次第で調整する。
+
+# ── v2.4（2026/9/14）：通常の成績(ability_avg)の参照窓を3走→6走に拡大 ──
+# NAR側（v3.15）で検証済みの考え方をJRAにも適用。targets=past_races[:3]→
+# past_races[:JRA_ABILITY_AVG_WINDOW]（6）、weights=WEIGHT_RECENT→
+# WEIGHT_RECENT_EXTENDED_JRAに変更。3走以下の馬はability_avgが従来と
+# 完全に同じ値になることを確認済み（先頭3つの重みが旧WEIGHT_RECENTと
+# 一致するため）。
+# 確認済み：JRAのcalc_recent_form_penalty()はtargetsを共有せず、自身の
+# 引数を独自にpast_races[:3]へ再スライスする設計のため、NAR側でv3.16と
+# して踏んだ「窓拡大が近走不振側にも意図せず波及する」問題はJRAでは
+# 構造的に発生しない。
+
+# ── v2.3（2026/9/14）：JRA距離好走ボーナスへのクラス格差割引 ───────────
+# NAR側（v3.13/14）で検証済みの「今回より格下クラスでの好走は距離好走
+# ボーナスを割り引く」仕組みを、そのままJRAにも適用。JRAには地方受け入れ
+# クラス変換のような特殊事情が無いため、_class_base_fn_for_dist_bonus()
+# （is_localを無視してget_class_baseを使うだけの薄いラッパー）を新設し、
+# calc_distance_aptitude_bonusのclass_base_fnに渡した。current_baseは
+# 格上挑戦除外判定と共用するため、current_class未指定時もCLASS_BASE_DEFAULT
+# にフォールバックする形で常に計算するよう変更（NAR v3.12と同じ考え方）。
+# JRAのクラス間隔（未勝利95→1勝92→2勝88→3勝84→OP80、いずれも4.0pt刻み）
+# はNARと同一のため、class_gap_discount_per_pt=0.15（デフォルト）を
+# そのまま流用できる。
+# 検証：1勝クラスでの1着(今回3勝クラス、2階級=8pt差) → 完全に無効化
+# （0.0、ラベルは新設した"距離X着(格差大により無効)"）。同格なら満額6.5。
+# ついでに、クラス格差割引で完全にゼロになった場合にラベルが空になって
+# いた表示上の抜けも修正（"距離X着(格差大により無効)"を追加）。
+# calc_distance_aptitude_bonus自体はJRA/NAR共有関数のため、この修正は
+# calculator_nar.py側の再デプロイなしでNARにも自動的に反映される。
 
 # ── v2.2（2026/9/14）：JRA距離好走ボーナスへの時系列減衰導入 ────────────
 # ユーザー指摘（ローズS事例）：距離好走ボーナス（現行1着6.5pt）が、NAR側
@@ -188,6 +235,22 @@ MARGIN_BONUS_THRESHOLDS = [
 ]
 
 WEIGHT_RECENT = [0.5, 0.3, 0.2]
+
+# ── 通常の成績（ability_avg）の参照窓拡大＋時系列減衰（v2.4追加）───────
+# NAR側（v3.15）で検証済みの考え方をJRAにも適用。従来はtargets=
+# past_races[:3]・WEIGHT_RECENT=[0.5,0.3,0.2]で「直近3走で打ち切り」
+# だったため、たまたま2走前に1回好走が混じるだけで加重平均が持ち上がり
+# すぎる一方、直近の大敗が決定力を持てない問題があった。競馬新聞の馬柱が
+# 過去5走を載せていることに倣い、NARと同じく6走を採用。
+# 直近3走の重みは既存のWEIGHT_RECENTと完全一致（3走以下の馬はability_avg
+# が今までと同じ値になる）。4〜6走目は同程度の減衰比で追加（暫定値・
+# 要検証）。
+# 注意：JRAのcalc_recent_form_penalty()は自身の内部でpast_races[:3]を
+# 独自に再スライスする設計のため（targetsを共有しない）、この窓拡大が
+# 近走不振側に意図せず波及することはない（NAR側でv3.16として踏んだ
+# 落とし穴は、JRAの設計では最初から起こり得ない）。
+JRA_ABILITY_AVG_WINDOW = 6
+WEIGHT_RECENT_EXTENDED_JRA = [0.5, 0.3, 0.2, 0.13, 0.09, 0.06]
 
 # ── 距離好走ボーナス用・時系列減衰テーブル（v1.10追加）─────────────────
 # calc_grade_bonus()の馬齢限定戦モード（TIME_WEIGHTS）と同じ考え方・同じ値。
@@ -626,6 +689,13 @@ def calc_grade_bonus(
                                  # 馬齢限定戦モード（AGE_LIMITED_BASE）は対象外
                                  # （今回の再キャリブレーションは通常モードの
                                  # 「格B」タグのデータに基づくため）。
+    index_offset: int = 0,      # v2.5追加：馬齢限定戦モード（TIME_WEIGHTS）の
+                                 # 参照indexに加えるオフセット。長期休養明け
+                                 # （calc_phase1側で検知）の場合、直前の1走が
+                                 # 実質的に「もっと古い」ものとして減衰させる
+                                 # ために使う（idx+index_offset番目の減衰係数
+                                 # を使う）。通常モード（age_limited=False）は
+                                 # 時系列indexを使わない別方式のため対象外。
 ) -> float:
     """
     全過去走から格戦ボーナスを集計して返す。
@@ -677,7 +747,8 @@ def calc_grade_bonus(
                     continue
             base   = AGE_LIMITED_BASE.get(gkey, 0.8)
             scale  = GRADE_RANK_SCALE.get(pr.finish, 0.4)
-            t_w    = TIME_WEIGHTS[idx] if idx < len(TIME_WEIGHTS) else TIME_WEIGHTS[-1]
+            t_idx  = idx + index_offset
+            t_w    = TIME_WEIGHTS[t_idx] if t_idx < len(TIME_WEIGHTS) else TIME_WEIGHTS[-1]
             total += base * scale * t_w
         return round(total, 4)
 
@@ -956,6 +1027,13 @@ def calc_distance_aptitude_bonus(
                                       # 割り引く（暫定値・要検証）。差4.0pt
                                       # （A/B/C間の1階級分）で60%減、差6.7pt
                                       # 超で0（全額無効）となる計算。
+    index_offset: int = 0,           # v2.5追加：recency_weightsの参照index
+                                      # に加えるオフセット。長期休養明け
+                                      # （呼び出し元のcalc_phase1/calc_phase1_nar
+                                      # 側で検知）の場合、直前の1走が実質的に
+                                      # 「もっと古い」ものとして減衰させるために
+                                      # 使う（idx+index_offset番目の減衰係数を
+                                      # 使う）。recency_weights未指定時は無効。
 ) -> tuple[float, str]:
     """
     距離適性ボーナスを計算して返す（v1.0改訂）。
@@ -1021,7 +1099,8 @@ def calc_distance_aptitude_bonus(
             m_scale = _margin_scale_of(pr)
             decay = 1.0
             if recency_weights:
-                decay = recency_weights[idx] if idx < len(recency_weights) else recency_weights[-1]
+                t_idx = idx + index_offset
+                decay = recency_weights[t_idx] if t_idx < len(recency_weights) else recency_weights[-1]
             class_discount = _class_discount_of(pr)
             eff = round(base * closeness * m_scale * decay * class_discount, 3)
             candidates.append((eff, idx, pr, m_scale, decay, class_discount))
@@ -1038,6 +1117,8 @@ def calc_distance_aptitude_bonus(
                 best_finish_label = f"距離好走{best_pr.finish}着:{good_finish_bonus:+.3f}{suffix}"
             elif best_m_scale == 0.0 and _table.get(best_pr.finish, 0.0) > 0:
                 best_finish_label = f"距離{best_pr.finish}着(着差大無効)"
+            elif best_class_discount == 0.0 and _table.get(best_pr.finish, 0.0) > 0:
+                best_finish_label = f"距離{best_pr.finish}着(格差大により無効)"
         return _apply_stamina_and_surface_penalty(
             good_finish_bonus, best_finish_label, past_races, target_distance,
             target_surface, all_past_races,
@@ -1354,6 +1435,16 @@ def get_class_base(race_class: str) -> float:
     return CLASS_BASE_DEFAULT
 
 
+def _class_base_fn_for_dist_bonus(race_class: str, is_local: bool) -> float:
+    """
+    距離好走ボーナスのclass_base_fn用ラッパー（v2.3追加）。
+    NAR側（get_class_base_nar_for_dist_bonus）と同じシグネチャに揃える
+    ためのもの。JRAには地方受け入れクラス変換のような特殊事情が無いため、
+    is_localは無視して常にget_class_baseを使う。
+    """
+    return get_class_base(race_class)
+
+
 # 大差負けペナルティ（6着以下・着差ベース）
 # margin（秒差）が大きいほどペナルティ加算
 LARGE_MARGIN_PENALTY = [
@@ -1664,8 +1755,11 @@ def calc_phase1(
     #
     # 1勝馬がG2/G3で大敗、2勝馬がG1で大敗 → 格上挑戦として除外
     OP_BASE_THRESHOLD = 81.0  # オープン・L以上（base≤80）
+    # v2.3：current_baseは距離好走ボーナスのクラス格差ディスカウント
+    # （後述）でも使うため、current_class未指定時もCLASS_BASE_DEFAULTに
+    # フォールバックする形で常に計算しておく（NAR側v3.12と同じ考え方）。
+    current_base = get_class_base(current_class) if current_class else CLASS_BASE_DEFAULT
     if current_class and past_races:
-        current_base = get_class_base(current_class)
         non_overclass = []
         overclass_excluded = 0
         for pr in past_races:
@@ -1683,8 +1777,9 @@ def calc_phase1(
             past_races_all = list(past_races)
             result.note = (result.note + f" [格上挑戦除外{overclass_excluded}走]").strip()
 
-    # ── 各走のポイント計算（最大3走）
-    targets = past_races[:3]
+    # ── 各走のポイント計算（最大6走。v2.4で3→6に拡大、詳細は
+    #    JRA_ABILITY_AVG_WINDOWのコメント参照）
+    targets = past_races[:JRA_ABILITY_AVG_WINDOW]
     race_points = []
     finish_list = []
     penalty_notes = []  # 大差負け・相対着順ペナルティのnote用
@@ -1829,7 +1924,7 @@ def calc_phase1(
             result.phase1_score = 9999.0
             return result
 
-    weights = WEIGHT_RECENT[: result.valid_runs]
+    weights = WEIGHT_RECENT_EXTENDED_JRA[: result.valid_runs]
     total_w = sum(weights)
     ability_avg = sum(p * w for p, w in zip(race_points, weights)) / total_w
     result.ability_avg  = round(ability_avg, 3)
@@ -1889,6 +1984,8 @@ def calc_phase1(
     # 今回レース日と前走日付の差から休養期間を算出
     # 70〜112日（10〜16週）: 適度な休養 → -0.5pt（ボーナス）
     # 112日超（16週超）    : 長期休養   → +2.0pt（ペナルティ）
+    _rest_index_offset = 0  # v2.5追加：長期休養時、格B・距離好走の時系列
+                             # 減衰indexを前倒しする（後述）ためのオフセット。
     if race_date and _all_for_interval:
         from datetime import datetime as _dt
         try:
@@ -1912,12 +2009,25 @@ def calc_phase1(
                     result.phase1_score = round(result.phase1_score + 2.0, 3)
                     result.ability_avg  = round(result.ability_avg  + 2.0, 3)
                     result.note = (result.note + f" [長期休養({_days}日):+2.0]").strip()
+                    # v2.5追加：ユーザー指摘（2026/9/14・ローズS）：格B・
+                    # 距離好走の時系列減衰は「何走前か」（走数ベース）であり
+                    # 「何日休んだか」（カレンダー時間）を見ていないため、
+                    # 長期休養明けでも直前の1走がそのまま「直近走」として
+                    # 満額に近い評価が残ってしまっていた（例：タイセイボーグ
+                    # 196日休養、格B=-5.6・距離好走1着=+6.5が無傷のまま）。
+                    # 長期休養を検知したら、直前走を実質1走分（さらに休養が
+                    # 長ければ2走分）古いものとみなし、格B・距離好走の時系列
+                    # 減衰indexを前倒しする（対症療法ではなく、根本の時間軸の
+                    # ズレに直接効かせる案。まずは+1のみで再キャリブレーション
+                    # して様子を見る方針）。
+                    _rest_index_offset = 1
         except Exception:
             pass  # 日付パース失敗時は無視
 
     # ── 格ボーナス（v1.0復活、全過去走対象）
     if use_grade_bonus:
-        grade_b = calc_grade_bonus(past_races_all, age_limited=age_limited, classic_distance=classic_distance)
+        grade_b = calc_grade_bonus(past_races_all, age_limited=age_limited, classic_distance=classic_distance,
+                                    index_offset=_rest_index_offset)
         if grade_b > 0:
             result.phase1_score = round(result.phase1_score - grade_b, 3)
             result.ability_avg  = round(result.ability_avg  - grade_b, 3)
@@ -1957,6 +2067,14 @@ def calc_phase1(
                                        # 明けでも距離好走が減衰せず満額の
                                        # まま残り、上り馬より過大評価され
                                        # ていた）。
+            class_base_fn=_class_base_fn_for_dist_bonus,  # v2.3追加：NARの
+                                       # クラス格差割引（v3.13/14）と同じ
+                                       # 考え方をJRAにも適用。JRAは地方受け
+                                       # 入れ変換のような特殊事情が無いため、
+                                       # is_localを無視してget_class_baseを
+                                       # そのまま使うラッパーを渡すだけで済む。
+            current_class_base=current_base,
+            index_offset=_rest_index_offset,  # v2.5追加：長期休養時の減衰前倒し
         )
         result.phase1_score = round(result.phase1_score - dist_bonus, 3)
         result.ability_avg  = round(result.ability_avg  - dist_bonus, 3)

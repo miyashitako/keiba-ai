@@ -37,7 +37,15 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.17-overclass_discount_not_exclude"
+__version__ = "3.18-rest_index_offset"
+
+# ── v3.18（2026/9/14）：長期休養時の時系列減衰index前倒し（設計案B） ──
+# JRA側（calculator.py v2.5）と同じ考え方をNARにも適用。距離好走
+# ボーナスのcalc_distance_aptitude_bonus呼び出しにindex_offset
+# （112日超の長期休養検知時のみ1）を渡す。NARの格B呼び出しは
+# age_limited=False固定（TIME_WEIGHTSを使わない同一グレード内逓減方式）
+# のため、このオフセットは効かない（対象外）。
+# 検証：休養明け(196日)は距離好走1着が満額8.9→減衰0.70の6.23に。
 
 # ── v3.17（2026/9/14）：格上挑戦の扱いを「除外」から「ペナルティ免除」に変更 ──
 # ユーザー指摘（2026/9/13・水沢9R race_id=202636091309／12R
@@ -1633,6 +1641,13 @@ def calc_phase1_nar(
             result.note = (result.note + f" [{form_label}:+{form_pen:.1f}→cap済(0)]").strip()
 
     # ── 出走間隔補正
+    _rest_index_offset = 0  # v3.18追加：長期休養時、距離好走の時系列減衰
+                             # indexを前倒しする（後述）ためのオフセット。
+                             # NAR側の格Bはage_limited=False固定（同一
+                             # グレード内逓減方式）でTIME_WEIGHTSを使わない
+                             # ため、このオフセットは距離好走ボーナスにのみ
+                             # 効く（JRA側は格Bにも効く。calculator.py v2.5
+                             # 参照）。
     if race_date and past_races_all:
         from datetime import datetime as _dt
         try:
@@ -1656,6 +1671,7 @@ def calc_phase1_nar(
                     result.ability_avg  = round(result.ability_avg  + 2.0, 3)
                     result.best_time    = round(result.best_time    + 2.0, 3)
                     result.note = (result.note + f" [長期休養({_days}日):+2.0]").strip()
+                    _rest_index_offset = 1
         except Exception:
             pass
 
@@ -1697,6 +1713,7 @@ def calc_phase1_nar(
             recency_weights=DIST_BONUS_RECENCY_WEIGHTS,  # v3.11追加：時系列減衰
             class_base_fn=get_class_base_nar_for_dist_bonus,  # v3.14：JRA転入馬対応版に差し替え
             current_class_base=current_base,
+            index_offset=_rest_index_offset,  # v3.18追加：長期休養時の減衰前倒し
         )
         # v2.8：距離好走1着×低走数（有効走数<=NAR_DIST_LOW_RUNS_THRESHOLD）で
         # 追加の交互作用効果がrecalibrate.pyで確認されたため、該当馬には
