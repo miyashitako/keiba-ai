@@ -37,7 +37,18 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.18-rest_index_offset"
+__version__ = "3.19-nar_long_rest_bonus_trial"
+
+# ── v3.19（2026/9/15）：NAR長期休養をペナルティ→ボーナスに試験反転 ──
+# recalibrate.py（連続値モード、v0.10の符号バグ修正後）で、NARの長期休養
+# が3ラウンド連続で実効倍率マイナス（符号逆転の可能性）と出たことを受け、
+# 112日超の長期休養を試験的にペナルティ(+2.0)からボーナス(-1.0)へ反転。
+# 地方は使い詰めの馬が多く、休養明けは仕上げてくる、という実態を反映して
+# いる可能性がある。JRA側（calculator.py）は同じ符号逆転が見られなかった
+# ため、+2.0ペナルティのまま維持（今回未変更）。
+# recalibrate.pyの_ADDITIVE_PENALTY_TAGSもmeta["system"]を見てNAR分析時
+# のみ長期休養を除外するよう対応済み（v0.11）。
+# 再キャリブレーションで方向・値とも様子を見る。
 
 # ── v3.18（2026/9/14）：長期休養時の時系列減衰index前倒し（設計案B） ──
 # JRA側（calculator.py v2.5）と同じ考え方をNARにも適用。距離好走
@@ -1667,10 +1678,18 @@ def calc_phase1_nar(
                     result.best_time    = round(result.best_time    - 0.5, 3)
                     result.note = (result.note + f" [適度な休養({_days}日):-0.5]").strip()
                 elif _days > 112:
-                    result.phase1_score = round(result.phase1_score + 2.0, 3)
-                    result.ability_avg  = round(result.ability_avg  + 2.0, 3)
-                    result.best_time    = round(result.best_time    + 2.0, 3)
-                    result.note = (result.note + f" [長期休養({_days}日):+2.0]").strip()
+                    # v3.19修正：recalibrate.py連続値モード（バグ修正後）で
+                    # 実効倍率-2.40（符号逆転の可能性）と出たことを受け、
+                    # NARの長期休養は試験的にペナルティ(+2.0)からボーナス
+                    # (-1.0)へ反転する。地方は使い詰めの馬が多く、休養明けは
+                    # 仕上げてくる、という実態を反映している可能性がある
+                    # （JRAは同じ符号逆転が見られなかったため、JRA側は
+                    # +2.0ペナルティのまま維持）。再キャリブレーションで
+                    # 様子を見て、方向・値とも今後調整する。
+                    result.phase1_score = round(result.phase1_score - 1.0, 3)
+                    result.ability_avg  = round(result.ability_avg  - 1.0, 3)
+                    result.best_time    = round(result.best_time    - 1.0, 3)
+                    result.note = (result.note + f" [長期休養({_days}日):-1.0]").strip()
                     _rest_index_offset = 1
         except Exception:
             pass
