@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.22-nar_form_penalty_discount_aware_and_region_tag"
+__version__ = "3.23-nar_grade_bonus_juusho_fix_and_demotion_guard"
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
@@ -1852,7 +1852,21 @@ def calc_phase1_nar(
     # JRA転入馬の過去走クラス評価は、距離好走ボーナスの格差割引（v3.14）と
     # 同じget_class_base_nar_for_dist_bonus()（JRA転入マップ優先）を使う
     # ことで、v3.10/v3.14で発覚した「is_local未対応」バグの再発を避ける。
-    if past_races_all and current_class:
+    # ── v3.23：current_class未解決時の誤発火防止（重要な安全弁）
+    # 2026/9/13水沢12R青藍賞(重賞)の事後検証で発覚：この重賞レースの
+    # current_classがおそらく空文字列等でうまく解決できず（要調査。
+    # get_class_base_nar("")==CLASS_BASE_NAR_DEFAULT==95.0という、
+    # C(92.0)より下＝実質未勝利級という異常な扱いになっていた）、
+    # current_base=95.0のまま計算された結果、出走馬のほぼ全頭
+    # （重賞・Jpn級の実績を持つ馬なら誰でも）が「格上からの降格」に
+    # 該当する扱いになり、降格(クラス)ボーナスが場違いに一律発火して
+    # いた（サクラトップキッド以外の全頭も同じ「3走:-3.0」で頭打ち）。
+    # current_baseがCLASS_BASE_NAR_DEFAULTと一致する（＝今回のクラスが
+    # 実質不明のまま計算されている）場合は、降格判定の前提そのものが
+    # 信頼できないため、このボーナス自体を丸ごとスキップする。
+    # 根本原因（current_classがなぜ重賞レースで解決できないのか）は
+    # スクレイパー側の調査が別途必要（本ファイルの管轄外）。
+    if past_races_all and current_class and current_base != CLASS_BASE_NAR_DEFAULT:
         class_demotion_count = sum(
             1 for pr in past_races_all[:3]
             if (current_base - get_class_base_nar_for_dist_bonus(pr.race_class, pr.is_local))
