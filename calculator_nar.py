@@ -37,7 +37,13 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.19-nar_long_rest_bonus_trial"
+__version__ = "3.22-nar_form_penalty_discount_aware_and_region_tag"
+
+# ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
+# v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
+# 過小）と出たため、いつもの「現行値とimplied値の中間に半分反映」方針で
+# -1.0 + 0.5*(-4.8-(-1.0)) = -2.9 に増額。反転後まだ1ラウンド目のデータ
+# のため、一気にimplied値（-4.8）までは持っていかず保守的に。
 
 # ── v3.19（2026/9/15）：NAR長期休養をペナルティ→ボーナスに試験反転 ──
 # recalibrate.py（連続値モード、v0.10の符号バグ修正後）で、NARの長期休養
@@ -493,6 +499,30 @@ CENTRAL_TRANSFER_BONUS_PER_RACE = 6.0
 CENTRAL_TRANSFER_BONUS_MAX = 14.5
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
 CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 8.0
+
+# ── v3.21（2026/9/17）：降格ボーナス新設（クラス降格・地区降格）─────────
+# 背景：これまで「格上→格下」の移動は、calc_momentum_bonus_nar()が
+# 「格下げにはペナルティを付与しない」（0.0）だけで、中央転入ボーナスや
+# 昇級勢いのような明示的な加点が一切無かった。南関東→他地区の移動も同様に、
+# 過去走の大差負け・最下位圏ペナルティを免除するだけ（TOUGHER_REGION_
+# PENALTY_DISCOUNT）で、南関東経験そのものへの積極的な評価が無かった。
+# 通称「格下げのヤリ」（上位クラス・格上地区で通用しなかった馬が下位に
+# 回ると好走する現象）が過小評価されているのではないか、というユーザーの
+# 仮説を受けて新設する。
+#
+# 設計は中央転入ボーナスと同じ「直近3走（past_races_all[:3]、面不問）中、
+# 該当条件を満たす走数×PER_RACE、MAX頭打ち」方式。中央転入と独立して
+# 加算可能（同一走が両方の条件を満たしても二重にはしない設計にはして
+# いない＝クラス降格と地区降格は別現象として両方カウントされ得る。
+# 実データでの共起頻度・要否はrecalibrate.pyで検証する）。
+#
+# 初期値は根拠となるデータが無いため、v1.9で「二重計上」を理由に廃止された
+# REGION_TRANSFER_BONUS_PER_RACE/MAX（当時1.5/3.0pt）と同水準の保守的な
+# 値から開始し、他のタグと同様に再収集→recalibrate.py→半分反映で調整する。
+NAR_CLASS_DEMOTION_BONUS_PER_RACE = 1.0
+NAR_CLASS_DEMOTION_BONUS_MAX = 3.0
+NAR_REGION_DEMOTION_BONUS_PER_RACE = 1.5
+NAR_REGION_DEMOTION_BONUS_MAX = 3.0
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -1318,15 +1348,27 @@ def calc_momentum_bonus_nar(
     return 0.0, ""
 
 
-def calc_recent_form_penalty_nar(targets: list) -> tuple:
+def calc_recent_form_penalty_nar(targets: list, discount_by_race: "dict | None" = None) -> tuple:
     """
     直近3走（v3.16よりability_avg用のtargets（最大6走）とは独立して
     明示的に3走に絞った集合）から、着差込みでNAR独自の近走不振ペナルティ
     を算出する。
 
+    v3.22修正：discount_by_race（id(pr)→discount、calc_phase1_nar側の
+    is_overclass/is_discounted判定と同一のもの）を受け取り、格上挑戦・
+    南関東等の格上文脈で記録された不振走は、calc_race_point_nar()の
+    大差負け・最下位圏ペナルティと同様に割引く（discount>=1.0の全額免除
+    走は「不振」判定そのものから除外する）。従来はこの関数が完全に
+    discount文脈を無視しており、格上挑戦で降格してきた馬・南関東から
+    転入した馬の直近成績が不当に「不振」扱いされ、特に有効走数の少ない
+    馬でこの傾向が強く出ていた（recalibrate.pyで「近走不振×低走数」の
+    符号逆転として検出）。
+
     戻り値：(ペナルティ値, ラベル文字列)。該当なしなら(0.0, "")。
     """
+    discount_by_race = discount_by_race or {}
     poor_races = []
+    discounted_count = 0
     for pr in targets:
         finish = getattr(pr, "finish", 0)
         if not finish or finish < 6:
@@ -1334,16 +1376,22 @@ def calc_recent_form_penalty_nar(targets: list) -> tuple:
         gap = 0.0 if finish == 1 else getattr(pr, "margin", 0.0)
         if gap <= NAR_FORM_MARGIN_OK:
             continue  # 着外でも僅差なら「不振」に数えない
+        discount = discount_by_race.get(id(pr), 0.0)
+        if discount >= 1.0:
+            continue  # 格上挑戦・南関東等での不振は「不振」判定自体から除外
         for threshold, pen in NAR_FORM_PENALTY_TIERS:
             if gap <= threshold:
-                poor_races.append(pen)
+                poor_races.append(pen * (1.0 - discount))
+                if discount > 0:
+                    discounted_count += 1
                 break
 
     if len(poor_races) < NAR_FORM_MIN_POOR_RACES:
         return 0.0, ""
 
     total = min(sum(poor_races), NAR_FORM_PENALTY_CAP)
-    label = f"近走不振(着外{len(poor_races)}走・着差考慮)"
+    discount_suffix = f"・格上等割引{discounted_count}走" if discounted_count else ""
+    label = f"近走不振(着外{len(poor_races)}走・着差考慮{discount_suffix})"
     return round(total, 3), label
 
 
@@ -1517,6 +1565,7 @@ def calc_phase1_nar(
     discounted_race_count = 0
     overclass_discounted_count = 0
     raw_pen_total = 0.0  # 近走不振キャップ判定用：割引前の生ペナルティ合計
+    discount_by_race = {}  # v3.22追加：calc_recent_form_penalty_nar用に持ち回す
     for pr in targets:
         gap = 0.0 if pr.finish == 1 else pr.margin
 
@@ -1540,6 +1589,7 @@ def calc_phase1_nar(
             discount = TOUGHER_REGION_PENALTY_DISCOUNT
         else:
             discount = 0.0
+        discount_by_race[id(pr)] = discount
 
         # v3.10追加：JRA時代の過去走（is_local=False）は、JRA内部の
         # クラス階層ではなく、地方側の実際の受け入れクラス格付け
@@ -1621,7 +1671,7 @@ def calc_phase1_nar(
     # 無効化されていたことになる）。NAR_FORM_PENALTY_CAP自体に連動する
     # NAR_COMBINED_PENALTY_CAPとして定義し直し、今後定数を調整しても
     # 同じ問題が再発しないようにした。
-    form_pen, form_label = calc_recent_form_penalty_nar(targets[:3])
+    form_pen, form_label = calc_recent_form_penalty_nar(targets[:3], discount_by_race)
     # v3.16修正：targetsをv3.15でability_avg用に6走へ拡大した際、
     # calc_recent_form_penalty_nar()も同じtargets変数を受け取っていた
     # ため、近走不振の判定窓も意図せず3走→6走に広がってしまっていた
@@ -1678,18 +1728,20 @@ def calc_phase1_nar(
                     result.best_time    = round(result.best_time    - 0.5, 3)
                     result.note = (result.note + f" [適度な休養({_days}日):-0.5]").strip()
                 elif _days > 112:
-                    # v3.19修正：recalibrate.py連続値モード（バグ修正後）で
-                    # 実効倍率-2.40（符号逆転の可能性）と出たことを受け、
-                    # NARの長期休養は試験的にペナルティ(+2.0)からボーナス
-                    # (-1.0)へ反転する。地方は使い詰めの馬が多く、休養明けは
-                    # 仕上げてくる、という実態を反映している可能性がある
-                    # （JRAは同じ符号逆転が見られなかったため、JRA側は
-                    # +2.0ペナルティのまま維持）。再キャリブレーションで
-                    # 様子を見て、方向・値とも今後調整する。
-                    result.phase1_score = round(result.phase1_score - 1.0, 3)
-                    result.ability_avg  = round(result.ability_avg  - 1.0, 3)
-                    result.best_time    = round(result.best_time    - 1.0, 3)
-                    result.note = (result.note + f" [長期休養({_days}日):-1.0]").strip()
+                    # v3.20修正：recalibrate.py（v3.19データ、反転後1ラウンド目）
+                    # で実効倍率+4.81（現行-1.0は過小）と出たため、いつもの
+                    # 「現行値とimplied値の中間に半分反映」方針で-1.0→-2.9に
+                    # 増額。implied基準：-1.0 + 0.5*(-4.8-(-1.0)) = -2.9。
+                    # 反転後まだ1ラウンド目のデータのため、一気にimplied値
+                    # （-4.8）まで持っていかず保守的に。
+                    # v3.22修正：v3.20データ（反転後2ラウンド目、536頭・
+                    # z=2.29 p=0.022 ★有意）で実効倍率+1.66（現行-2.9はまだ
+                    # 過小）と出たため、同じ半分反映方針で-2.9→-3.9に増額。
+                    # implied基準：-2.9 + 0.5*(-2.9*1.66-(-2.9)) = -3.9。
+                    result.phase1_score = round(result.phase1_score - 3.9, 3)
+                    result.ability_avg  = round(result.ability_avg  - 3.9, 3)
+                    result.best_time    = round(result.best_time    - 3.9, 3)
+                    result.note = (result.note + f" [長期休養({_days}日):-3.9]").strip()
                     _rest_index_offset = 1
         except Exception:
             pass
@@ -1789,6 +1841,75 @@ def calc_phase1_nar(
             result.ability_avg  = round(result.ability_avg  - central_bonus, 3)
             result.best_time    = round(result.best_time    - central_bonus, 3)
             result.note = (result.note + f" [中央転入(JRA経験{jra_count}走{central_label_extra}):-{central_bonus:.1f}]").strip()
+
+    # ── v3.21：クラス降格ボーナス（新設）
+    # 直近3走（past_races_all[:3]、面不問。中央転入ボーナスと同じ範囲）のうち、
+    # 今回のクラス基準値より一定以上格上（OVERCLASS_THRESHOLD_NAR以上）の
+    # クラスで走っていた回数に応じて加点する。既存のoverclass_by_race
+    # （penalty_discount用のis_overclass判定）とは別に、finish>=6条件を
+    # 課さない広い判定を新規に行う（demotedな馬が格上クラスで好走していた
+    # 場合も「格上経験」として正しくカウントするため）。
+    # JRA転入馬の過去走クラス評価は、距離好走ボーナスの格差割引（v3.14）と
+    # 同じget_class_base_nar_for_dist_bonus()（JRA転入マップ優先）を使う
+    # ことで、v3.10/v3.14で発覚した「is_local未対応」バグの再発を避ける。
+    if past_races_all and current_class:
+        class_demotion_count = sum(
+            1 for pr in past_races_all[:3]
+            if (current_base - get_class_base_nar_for_dist_bonus(pr.race_class, pr.is_local))
+            >= OVERCLASS_THRESHOLD_NAR
+        )
+        if class_demotion_count > 0:
+            class_demotion_bonus = min(
+                class_demotion_count * NAR_CLASS_DEMOTION_BONUS_PER_RACE,
+                NAR_CLASS_DEMOTION_BONUS_MAX,
+            )
+            result.phase1_score = round(result.phase1_score - class_demotion_bonus, 3)
+            result.ability_avg  = round(result.ability_avg  - class_demotion_bonus, 3)
+            result.best_time    = round(result.best_time    - class_demotion_bonus, 3)
+            result.note = (result.note + f" [降格(クラス経験{class_demotion_count}走):-{class_demotion_bonus:.1f}]").strip()
+
+    # ── v3.21：南関東からの地区降格ボーナス（新設）
+    # 直近3走のうち、南関東（TOUGHER_REGIONS_NAR）で走っていた回数に応じて
+    # 加点する（今回の出走地区が南関東自身の場合は対象外）。TOUGHER_REGION_
+    # PENALTY_DISCOUNT（過去走の大差負け・最下位圏ペナルティ免除）とは独立
+    # した仕組みで、南関東経験そのものへの積極的な評価を行う。v1.9で廃止
+    # されたREGION_TRANSFER_BONUSの後継にあたるが、末尾一律加点ではなく
+    # 中央転入と同じper-race方式で再設計している。
+    if past_races_all and target_region_for_discount and target_region_for_discount not in TOUGHER_REGIONS_NAR:
+        region_demotion_count = sum(
+            1 for pr in past_races_all[:3]
+            if get_region_nar(getattr(pr, "venue", "")) in TOUGHER_REGIONS_NAR
+            and get_region_nar(getattr(pr, "venue", "")) != target_region_for_discount
+        )
+        if region_demotion_count > 0:
+            region_demotion_bonus = min(
+                region_demotion_count * NAR_REGION_DEMOTION_BONUS_PER_RACE,
+                NAR_REGION_DEMOTION_BONUS_MAX,
+            )
+            result.phase1_score = round(result.phase1_score - region_demotion_bonus, 3)
+            result.ability_avg  = round(result.ability_avg  - region_demotion_bonus, 3)
+            result.best_time    = round(result.best_time    - region_demotion_bonus, 3)
+            result.note = (result.note + f" [降格(地区・南関東経験{region_demotion_count}走):-{region_demotion_bonus:.1f}]").strip()
+
+    # ── v3.22：地区移籍の診断タグ（全8地区対象・スコアには一切影響させない）
+    # こうすけさんの仮説（南関東以外の地区間、例：東海→岩手のような移籍にも
+    # 「格下げのヤリ」的な過小評価があるのでは）を検証するため、将来の
+    # 地区間強さ指数の推定（Bradley-Terry方式：勝敗~Phase1スコア+移籍元
+    # 地区ダミー、南関東を基準点とする回帰）に使う生データを集めておく。
+    # 南関東起点は既存の降格ボーナス・地区転入割引と重複するが、それ以外の
+    # 7地区（岩手・兵庫・東海・北海道・北陸・高知・佐賀）については現状
+    # 一切記録されていないため、ここで初めて追跡する。スコアに影響しない
+    # 診断専用タグなので、record_only的にnoteへ追記するのみ。
+    if past_races_all and target_region_for_discount:
+        _origin_region_counts: dict = {}
+        for pr in past_races_all[:3]:
+            if not getattr(pr, "is_local", True):
+                continue  # JRA時代の過去走は地区診断タグの対象外（venue名がJRA場になるため）
+            _pr_region = get_region_nar(getattr(pr, "venue", ""))
+            if _pr_region and _pr_region != target_region_for_discount:
+                _origin_region_counts[_pr_region] = _origin_region_counts.get(_pr_region, 0) + 1
+        for _region, _cnt in _origin_region_counts.items():
+            result.note = (result.note + f" [移籍元({_region}):{_cnt}走]").strip()
 
     return result
 
