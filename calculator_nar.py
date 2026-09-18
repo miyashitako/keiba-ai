@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.23-nar_grade_bonus_juusho_fix_and_demotion_guard"
+__version__ = "3.24-nar_class_reliability_guard_strengthened"
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
@@ -1079,6 +1079,52 @@ def get_class_base_nar(race_class: str) -> float:
     return CLASS_BASE_NAR_DEFAULT
 
 
+def is_class_base_reliable_nar(race_class: str) -> bool:
+    """
+    v3.24追加：get_class_base_nar()の判定が「今回のクラスを確度高く
+    特定できている」ものかどうかを返す。
+
+    背景：2026/9/13水沢12R青藍賞(重賞)の事後検証で発覚した問題。
+    current_classが（何らかのスクレイパー側の事情で）"３歳以上"のような
+    年齢条件のみの文字列になっており、get_class_base_nar("３歳以上")は
+    OP/重賞/Jpn判定にも A/B/C判定にも引っかからず、④の馬齢限定戦
+    フォールバック（"若齢戦"＝92.8相当）に落ちていた。この値は
+    CLASS_BASE_NAR_DEFAULT（95.0）とは一致しないため、v3.23で入れた
+    「current_base==DEFAULTなら降格ボーナスをスキップ」という安全弁を
+    すり抜けてしまい、実際には重賞級のcurrent_classに対して"若齢戦"
+    （Cクラス未満相当）という大幅に低いクラスとして計算され続けた結果、
+    重賞・Jpn級の実績を持つ馬がほぼ全頭「格上からの降格」と誤判定される
+    という同じ症状が再発した。
+
+    根本原因（なぜ重賞レースのcurrent_classが年齢条件のみの文字列に
+    なってしまうのか）はスクレイパー側の調査事項として別途残るが、
+    calculator_nar.py側では「A/B/C・OP/重賞/Jpnのいずれにも該当しない
+    （＝④の馬齢限定戦フォールバックか⑤のDEFAULTに落ちた）場合は
+    今回のクラスを確度高く特定できていない」とみなし、降格ボーナス等
+    “今回のクラスとの比較”を前提とする新しい仕組みの土台には使わない
+    ようにする。既存の距離好走クラス格差割引・格上挑戦免除は、この
+    関数の導入以前から稼働している較正済みロジックのため、今回は
+    対象外とする（別途要調査）。
+    """
+    if not race_class:
+        return False
+    rc = _normalize_grade(race_class)
+    rc_norm = unicodedata.normalize("NFKC", rc)
+
+    if rc in CLASS_BASE or any(key in rc for key in CLASS_BASE):
+        return True
+    if re.search(r'OP|オープン|重賞|Jpn', rc_norm, re.IGNORECASE):
+        return True
+
+    def _match_local_class(letter: str) -> bool:
+        pattern = rf'(?<![A-Za-z0-9]){letter}[0-9]{{0,3}}(?![A-Za-z0-9])'
+        return bool(re.search(pattern, rc_norm, re.IGNORECASE)) or f"{letter}級" in rc_norm
+
+    if _match_local_class("A") or _match_local_class("B") or _match_local_class("C"):
+        return True
+    return False
+
+
 # ── JRA→NAR転入クラス格付けマップ（v3.10追加）───────────────────────
 # ユーザー指摘（2026/9/9・門別7R ルクスドリームの事例）に基づく修正：
 # 地方競馬側は実際の受け入れ運用として「未勝利→C、1勝→B、2勝→A、
@@ -1866,7 +1912,16 @@ def calc_phase1_nar(
     # 信頼できないため、このボーナス自体を丸ごとスキップする。
     # 根本原因（current_classがなぜ重賞レースで解決できないのか）は
     # スクレイパー側の調査が別途必要（本ファイルの管轄外）。
-    if past_races_all and current_class and current_base != CLASS_BASE_NAR_DEFAULT:
+    # ── v3.24：current_class未解決時の誤発火防止（v3.23の安全弁を強化）
+    # v3.23では current_base==CLASS_BASE_NAR_DEFAULT（95.0）のみを弾いて
+    # いたが、2026/9/13水沢12R青藍賞(重賞)で再検証したところ、この
+    # レースはCLASS_BASE_NAR_DEFAULTではなく"若齢戦"フォールバック
+    # （92.8相当、current_classが年齢条件のみの文字列だった可能性）に
+    # 落ちており、v3.23のガードをすり抜けて全頭一律誤発火が再発していた。
+    # is_class_base_reliable_nar()でA/B/C・OP/重賞/Jpnのいずれにも
+    # 該当しない（＝フォールバック分岐に落ちた）ケースを丸ごと弾く形に
+    # 強化する。
+    if past_races_all and current_class and is_class_base_reliable_nar(current_class):
         class_demotion_count = sum(
             1 for pr in past_races_all[:3]
             if (current_base - get_class_base_nar_for_dist_bonus(pr.race_class, pr.is_local))
