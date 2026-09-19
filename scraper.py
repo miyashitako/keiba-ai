@@ -746,7 +746,7 @@ def filter_past_races_before(past_races: list, cutoff_date: str) -> list:
 # 全出走馬の過去走をまとめて取得
 # ──────────────────────────────────────────────
 
-def fetch_all_horses(race_url: str, past_limit: int = 5) -> tuple[RaceInfo, list[Horse]]:
+def fetch_all_horses(race_url: str, past_limit: int = 10) -> tuple[RaceInfo, list[Horse]]:
     """
     レース情報取得 → 出走表取得 → 各馬の過去走取得 をまとめて実行
     戻り値: (RaceInfo, [Horse, ...])

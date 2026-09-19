@@ -164,11 +164,11 @@ if run:
         try:
             if backtest_mode:
                 race_info, horses = fetch_all_horses_nar_backtest(
-                    venue, race_date, race_no, past_limit=5
+                    venue, race_date, race_no, past_limit=10
                 )
             else:
                 race_info, horses = fetch_all_horses_nar(
-                    venue, race_date, race_no, past_limit=5
+                    venue, race_date, race_no, past_limit=10
                 )
         except Exception as e:
             st.error(f"データ取得に失敗しました: {e}")

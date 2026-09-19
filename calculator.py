@@ -4,7 +4,7 @@ Phase1〜Phase4 を固定数式で計算する
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.5-rest_index_offset"
+__version__ = "2.6-grade_bonus_juusho_and_recency_decay"
 
 # ── v2.5（2026/9/14）：長期休養時の時系列減衰index前倒し（設計案B） ──
 # ローズS（タイセイボーグ196日休養）の事例を受けた設計議論の結論：
@@ -761,14 +761,36 @@ def calc_grade_bonus(
             total += base * scale * t_w
         return round(total, 4)
 
-    # ── 通常モード（変更なし）─────────────────────────────────────
+    # ── 通常モード ─────────────────────────────────────────────
     # 同一グレードの好走を逓減合算
     # 1本目100%、2本目50%、3本目以降25%
+    #
+    # v2.8修正：この「同一グレードでの好走順位」による逓減は、何走前かに
+    # 関わらず一律に効いていた（極端な例：9歳馬の2〜3歳時の重賞好走が、
+    # 減衰なしで直近の好走と同じ扱いになる）。こうすけさん指摘に基づき、
+    # 距離好走ボーナスと同じ発想の「何走前か」で効く別軸の減衰を追加する
+    # （既存のグレード内逓減とは掛け算で併用。要検証のため暫定値）。
+    # 合わせて、この減衰を意味あるものにするため、fetch_all_horses系の
+    # past_limitを3〜5走→10走に引き上げた（scraper.py/scraper_nar.py側）。
     DECAY_RATES = [1.0, 0.5, 0.25]
 
-    # グレード別に好走（4着以内）を着順昇順でリスト化
+    GRADE_RECENCY_TIERS = [
+        (3, 1.0),   # 1〜3走前
+        (6, 0.6),   # 4〜6走前
+        (8, 0.3),   # 7〜8走前
+        (10, 0.1),  # 9〜10走前
+    ]  # それより古い（11走前以降）は0.0
+
+    def _grade_recency_weight(idx: int) -> float:
+        races_ago = idx + 1  # idx=0が1走前
+        for upper, weight in GRADE_RECENCY_TIERS:
+            if races_ago <= upper:
+                return weight
+        return 0.0
+
+    # グレード別に好走（4着以内）を(着順, 何走前か)のペアでリスト化
     grade_runs: dict[str, list] = {}
-    for pr in past_races:
+    for idx, pr in enumerate(past_races):
         if pr.finish <= 0 or pr.finish > 4:
             continue
         gkey = _detect_grade_key(pr.race_class)
@@ -776,17 +798,18 @@ def calc_grade_bonus(
             continue
         if gkey not in grade_runs:
             grade_runs[gkey] = []
-        grade_runs[gkey].append(pr.finish)
+        grade_runs[gkey].append((pr.finish, idx))
 
     total = 0.0
     _table = grade_table if grade_table is not None else GRADE_BONUS_TABLE
-    for gkey, finishes in grade_runs.items():
-        finishes_sorted = sorted(finishes)  # 着順昇順（最良から）
+    for gkey, entries in grade_runs.items():
+        entries_sorted = sorted(entries, key=lambda e: e[0])  # 着順昇順（最良から）
         base = _table.get(gkey, 0.0)
-        for i, rank in enumerate(finishes_sorted):
+        for i, (rank, idx) in enumerate(entries_sorted):
             decay = DECAY_RATES[i] if i < len(DECAY_RATES) else DECAY_RATES[-1]
             scale = GRADE_RANK_SCALE.get(rank, 0.4)
-            total += base * scale * decay
+            recency = _grade_recency_weight(idx)
+            total += base * scale * decay * recency
     return round(total, 4)
 
 

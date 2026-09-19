@@ -660,7 +660,7 @@ def fetch_all_horses_nar_backtest(
     race_date: "datetime.date | str",
     race_no: int,
     year: Optional[int] = None,
-    past_limit: int = 3,
+    past_limit: int = 10,
     horse_cache: "dict | None" = None,
     sleep_sec: float = 1.0,
     use_cache: bool = True,
@@ -749,7 +749,7 @@ def fetch_all_horses_nar(
     race_date: "datetime.date | str",
     race_no: int,
     year: Optional[int] = None,
-    past_limit: int = 5,
+    past_limit: int = 10,
 ) -> tuple[RaceInfo, list[Horse]]:
     """
     競馬場名・日付・レース番号からrace_idを組み立て、
