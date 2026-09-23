@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.25-nar_jra_origin_form_penalty_exempt"
+__version__ = "3.26-nar_kumi_gap_proportional_discount"
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
@@ -1587,13 +1587,10 @@ def calc_phase1_nar(
     # 好走しているのに予想順位が低く出る現象が複数レースで確認された）。
     # 南関東割引と同じ「penalty_discountで大差負け・最下位圏ペナルティ
     # だけを免除する」方式に統一し、レース自体はpast_racesに残す。
-    overclass_by_race = {}
-    if current_class and past_races:
-        for pr in past_races:
-            pr_base = get_class_base_nar(pr.race_class)
-            overclass_by_race[id(pr)] = (
-                (current_base - pr_base) >= OVERCLASS_THRESHOLD_NAR and pr.finish >= 6
-            )
+    # v3.26修正：is_overclassの二値判定（全か無かの割引）は、下のループ内で
+    # gapに比例した連続的な割引（class_gap_discount）に置き換えたため、
+    # このoverclass_by_race事前計算は不要になった（class_gap>=閾値のとき
+    # discount=1.0になる形で従来の挙動を包含している）。
 
     # ── 各走のポイント計算（最大6走。v3.15で3→6に拡大、詳細は
     #    NAR_ABILITY_AVG_WINDOWのコメント参照）
@@ -1611,6 +1608,7 @@ def calc_phase1_nar(
     discounted_race_count = 0
     overclass_discounted_count = 0
     jra_origin_discounted_count = 0  # v3.25追加
+    kumi_discounted_count = 0  # v3.26追加：組差による部分割引の発生回数
     raw_pen_total = 0.0  # 近走不振キャップ判定用：割引前の生ペナルティ合計
     discount_by_race = {}  # v3.22追加：calc_recent_form_penalty_nar用に持ち回す
     for pr in targets:
@@ -1627,7 +1625,21 @@ def calc_phase1_nar(
             and pr_region in TOUGHER_REGIONS_NAR
             and pr_region != target_region_for_discount
         )
-        is_overclass = overclass_by_race.get(id(pr), False)
+        # v3.26追加：組差（同じクラス文字内の細かい格差、例：C3二→C3三）による
+        # gapに比例した連続的な割引。背景：従来のis_overclassは
+        # OVERCLASS_THRESHOLD_NAR=4.0pt（クラス文字1段差相当）を閾値にした
+        # 全か無かの判定だが、組差はKUMI_STEP_NAR=0.4pt/組しかなく、複数組
+        # 離れていても4.0ptには遠く及ばないため、これまで一切割引の対象に
+        # なっていなかった（こうすけさん指摘：2026/9/23園田2R・ハイラブエナン、
+        # 直近ほぼ全てC3二での不振→C3三（一段易しい）で1着1人気的中したのに
+        # 予想は8頭中8位評価だった事例で発覚。人気馬・実際の好走馬が予想で
+        # 下位に来るパターンが多いとのこと）。
+        # 閾値ちょうど（gap>=4.0）でdiscount=1.0になり、従来のis_overclass
+        # 全額免除と滑らかに接続する（＝これまで発火していたケースの挙動は
+        # 変えず、閾値未満の小さな格差にだけ新たに部分割引を与える）。
+        _pr_base_for_kumi = get_class_base_nar(pr.race_class) if current_class else None
+        class_gap = (current_base - _pr_base_for_kumi) if _pr_base_for_kumi is not None else 0.0
+        class_gap_discount = min(1.0, class_gap / OVERCLASS_THRESHOLD_NAR) if class_gap > 0 else 0.0
         # v3.25追加：JRA時代（is_local=False）の過去走も全額免除の対象に含める。
         # 背景：中央転入ボーナスは「JRA出身は地力が高いはず」という前提で
         # 大きく加点しているのに、近走不振ペナルティは同じJRA時代の負けレースを
@@ -1637,14 +1649,14 @@ def calc_phase1_nar(
         # JRA未勝利→NAR C等の変換マップは格差ゼロ扱いになるため、これまでの
         # is_overclass判定だけではこのケースを捉えられていなかった。
         is_jra_origin = not getattr(pr, "is_local", True)
-        # v3.17：南関東割引・格上挑戦のどちらか該当すれば割引（両方該当でも
-        # 二重には割り引かない。格上挑戦は全額免除、南関東単独ならその割引率）。
-        if is_overclass or is_jra_origin:
+        # v3.17：南関東割引・格上挑戦・組差割引のいずれか該当すれば割引
+        # （二重には割り引かず、最大値を採用する）。
+        if is_jra_origin:
             discount = 1.0
         elif is_discounted:
-            discount = TOUGHER_REGION_PENALTY_DISCOUNT
+            discount = max(class_gap_discount, TOUGHER_REGION_PENALTY_DISCOUNT)
         else:
-            discount = 0.0
+            discount = class_gap_discount
         discount_by_race[id(pr)] = discount
 
         # v3.10追加：JRA時代の過去走（is_local=False）は、JRA内部の
@@ -1661,19 +1673,23 @@ def calc_phase1_nar(
                                   class_base_override=_class_base_override)
         if pt is not None:
             race_points.append(pt)
-            if is_discounted and not is_overclass and not is_jra_origin:
+            if is_discounted and not is_jra_origin and class_gap_discount < 1.0:
                 discounted_race_count += 1
-            if is_overclass:
-                overclass_discounted_count += 1
             if is_jra_origin:
                 jra_origin_discounted_count += 1
+            elif class_gap_discount >= 1.0:
+                overclass_discounted_count += 1
+            elif class_gap_discount > 0 and not (is_discounted and TOUGHER_REGION_PENALTY_DISCOUNT >= class_gap_discount):
+                kumi_discounted_count += 1
 
             if is_jra_origin:
                 discount_tag = "・JRA時代免除"
-            elif is_overclass:
+            elif class_gap_discount >= 1.0:
                 discount_tag = "・格上免除"
-            elif is_discounted and discount > 0:
+            elif is_discounted and discount > 0 and TOUGHER_REGION_PENALTY_DISCOUNT >= class_gap_discount:
                 discount_tag = "・南関東割引"
+            elif class_gap_discount > 0:
+                discount_tag = f"・組差割引{class_gap_discount:.2f}"
             else:
                 discount_tag = ""
             if pr.finish >= 6 and gap > NAR_LARGE_MARGIN_TRIGGER:
@@ -1704,6 +1720,8 @@ def calc_phase1_nar(
         result.note = (result.note + f" [格上挑戦{overclass_discounted_count}走の大敗ペナルティ免除]").strip()
     if jra_origin_discounted_count > 0:
         result.note = (result.note + f" [JRA時代{jra_origin_discounted_count}走の大敗ペナルティ免除]").strip()
+    if kumi_discounted_count > 0:
+        result.note = (result.note + f" [組差{kumi_discounted_count}走の大敗ペナルティ一部軽減]").strip()
 
     if result.valid_runs == 0:
         result.note = (result.note + " 有効な走行データなし").strip()
