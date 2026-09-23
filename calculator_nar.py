@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.24-nar_class_reliability_guard_strengthened"
+__version__ = "3.25-nar_jra_origin_form_penalty_exempt"
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
@@ -1610,6 +1610,7 @@ def calc_phase1_nar(
     penalty_notes = []
     discounted_race_count = 0
     overclass_discounted_count = 0
+    jra_origin_discounted_count = 0  # v3.25追加
     raw_pen_total = 0.0  # 近走不振キャップ判定用：割引前の生ペナルティ合計
     discount_by_race = {}  # v3.22追加：calc_recent_form_penalty_nar用に持ち回す
     for pr in targets:
@@ -1627,9 +1628,18 @@ def calc_phase1_nar(
             and pr_region != target_region_for_discount
         )
         is_overclass = overclass_by_race.get(id(pr), False)
+        # v3.25追加：JRA時代（is_local=False）の過去走も全額免除の対象に含める。
+        # 背景：中央転入ボーナスは「JRA出身は地力が高いはず」という前提で
+        # 大きく加点しているのに、近走不振ペナルティは同じJRA時代の負けレースを
+        # 免除なしで満額カウントしており、二重評価になっていた（こうすけさん
+        # 指摘：低走数×近走不振の符号逆転の原因が、南関東転入ではなく
+        # JRA転入直後の馬に集中していたことが実データ5例で確認できた）。
+        # JRA未勝利→NAR C等の変換マップは格差ゼロ扱いになるため、これまでの
+        # is_overclass判定だけではこのケースを捉えられていなかった。
+        is_jra_origin = not getattr(pr, "is_local", True)
         # v3.17：南関東割引・格上挑戦のどちらか該当すれば割引（両方該当でも
         # 二重には割り引かない。格上挑戦は全額免除、南関東単独ならその割引率）。
-        if is_overclass:
+        if is_overclass or is_jra_origin:
             discount = 1.0
         elif is_discounted:
             discount = TOUGHER_REGION_PENALTY_DISCOUNT
@@ -1651,12 +1661,21 @@ def calc_phase1_nar(
                                   class_base_override=_class_base_override)
         if pt is not None:
             race_points.append(pt)
-            if is_discounted and not is_overclass:
+            if is_discounted and not is_overclass and not is_jra_origin:
                 discounted_race_count += 1
             if is_overclass:
                 overclass_discounted_count += 1
+            if is_jra_origin:
+                jra_origin_discounted_count += 1
 
-            discount_tag = "・南関東割引" if (is_discounted and not is_overclass and discount > 0) else ("・格上免除" if is_overclass else "")
+            if is_jra_origin:
+                discount_tag = "・JRA時代免除"
+            elif is_overclass:
+                discount_tag = "・格上免除"
+            elif is_discounted and discount > 0:
+                discount_tag = "・南関東割引"
+            else:
+                discount_tag = ""
             if pr.finish >= 6 and gap > NAR_LARGE_MARGIN_TRIGGER:
                 for threshold, pen in NAR_LARGE_MARGIN_PENALTY:
                     if gap > threshold:
@@ -1683,6 +1702,8 @@ def calc_phase1_nar(
         result.note = (result.note + f" [地区転入(南関東{discounted_race_count}走の大敗ペナルティ免除)]").strip()
     if overclass_discounted_count > 0:
         result.note = (result.note + f" [格上挑戦{overclass_discounted_count}走の大敗ペナルティ免除]").strip()
+    if jra_origin_discounted_count > 0:
+        result.note = (result.note + f" [JRA時代{jra_origin_discounted_count}走の大敗ペナルティ免除]").strip()
 
     if result.valid_runs == 0:
         result.note = (result.note + " 有効な走行データなし").strip()
