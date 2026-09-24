@@ -74,6 +74,31 @@ def _extract_nar_race_class(text_norm: str) -> str:
         return cls
     return ""
 
+
+def _class_from_title(title_text: str, separator_pattern: str) -> str:
+    """
+    v3.27追加（scraper_nar.py側）：RaceData02には組情報（例："C3三"の"三"）が
+    含まれないページがあることが判明（2026/9/23園田2R・確定結果ページで
+    実機確認：RaceData02は"...サラ系3歳以上 C38頭..."で組情報が丸ごと欠落
+    していたが、<title>タグには"C3三 結果・払戻 | ..."と組込みで入っていた）。
+
+    無名の条件戦（重賞等の固有名が無いレース）は、<title>タグの
+    「出馬表|」「結果・払戻|」より前の部分がクラス表記そのものになる
+    （fetch_race_info_narの既存コメントにも同じ観察が既に記載されていた）。
+    この部分を_extract_nar_race_class()に通し、RaceData02由来の結果より
+    詳細（＝文字列として長い＝組情報を含む）であればそちらを採用する。
+
+    named race（重賞等）の場合はtitle先頭がレース名になるため、
+    _extract_nar_race_class()はほぼ確実に空文字列を返す（OP/重賞/Jpn/A-C
+    のいずれの候補文字列もレース名には通常含まれないため）ので、
+    その場合は呼び出し側でRaceData02由来の値がそのまま使われる。
+    """
+    m = re.match(separator_pattern, title_text)
+    if not m:
+        return ""
+    candidate_text = unicodedata.normalize("NFKC", m.group(1).strip())
+    return _extract_nar_race_class(candidate_text)
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -340,6 +365,17 @@ def fetch_race_info_nar(race_id: str) -> RaceInfo:
         _wt_text = text02_norm
         info.race_class = _extract_nar_race_class(text02_norm)
 
+    # v3.27追加：RaceData02に組情報が欠落しているページ対策。titleタグの
+    # 「出馬表|」より前の部分（無名条件戦ならクラス表記そのもの）から
+    # 抽出した候補が、RaceData02由来より詳細（文字列が長い）なら採用する。
+    title_el = soup.find("title")
+    if title_el:
+        title_candidate = _class_from_title(
+            title_el.get_text(strip=True), r"^(.+?)\s*出馬表\s*\|"
+        )
+        if len(title_candidate) > len(info.race_class):
+            info.race_class = title_candidate
+
     # 斤量方式（ハンデ/別定/定量）。地方は判定基準がJRAと異なる可能性があるため参考程度
     _wt_combined = _wt_text + info.race_name
     if "ハンデ" in _wt_combined:
@@ -586,6 +622,18 @@ def fetch_race_result_nar(race_id: str) -> tuple[RaceInfo, list]:
     if data02:
         text02_norm = unicodedata.normalize("NFKC", data02.get_text(strip=True))
         info.race_class = _extract_nar_race_class(text02_norm)
+
+    # v3.27追加：RaceData02に組情報が欠落しているページ対策（実機確認：
+    # 2026/9/23園田2R、RaceData02は"...C38頭..."で組情報なし、titleタグは
+    # "C3三 結果・払戻 | ..."で組込み）。titleタグの「結果・払戻|」より
+    # 前の部分から抽出した候補が、RaceData02由来より詳細なら採用する。
+    title_el = soup.find("title")
+    if title_el:
+        title_candidate = _class_from_title(
+            title_el.get_text(strip=True), r"^(.+?)\s*結果・払戻\s*\|"
+        )
+        if len(title_candidate) > len(info.race_class):
+            info.race_class = title_candidate
 
     # ── 確定結果テーブル
     tables = soup.find_all("table")
