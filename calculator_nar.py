@@ -37,7 +37,7 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.26-nar_kumi_gap_proportional_discount"
+__version__ = "3.26b-nar_kumi_gap_proportional_discount"
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
