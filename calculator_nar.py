@@ -37,7 +37,31 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.26b-nar_kumi_gap_proportional_discount"
+__version__ = "3.27-nar_grade_b_override_and_region_demotion_halfstep"
+
+# ── v3.27（2026/9/25）：3.26b再収集分の再キャリブレーションを反映 ──────
+# calc_version "3.26b-nar_kumi_gap_proportional_discount"（新scraper＋組差
+# 割合ディスカウント＋title補完後、48079頭／4710レース、拡大期間4〜9月）
+# での再キャリブレーション結果を、優先順位(A)の3項目に反映する。
+#
+# ・格B：実効倍率+5.90（旧+5.92から実質不変）→ 半歩案（×3.46）をそのまま
+#   実装。ただしGRADE_BONUS_TABLE（calculator.py）はJRA側のG1〜L格ボーナス
+#   とも共有されており、そのまま値を書き換えるとJRA側の格ボーナスまで
+#   NARの実効倍率で3.46倍してしまう（JRA側は今回この倍率で再測定して
+#   いない）。calc_grade_bonus()には元々この目的のためのgrade_table
+#   override引数が用意されていた（v1.3で追加・当時から「NARの格B再
+#   キャリブレーション用に用意したが未使用」と明記されていたもの）ため、
+#   これを使ってNAR専用テーブルGRADE_BONUS_TABLE_NARを新設し、NARの
+#   calc_grade_bonus呼び出しにのみ渡す。JRA側（calculator.py）の呼び出し・
+#   数値は完全に無変更。
+# ・降格(クラス)：実効倍率+1.00（旧+0.80から変化、もはや過小ではない）→
+#   【現行設定でおおむね妥当】と判定されたため、当初予定していた半歩調整
+#   （PER_RACE 1.0→0.9, MAX 3.0→2.7）は見送り、現状値のまま維持。
+# ・降格(地区)：実効倍率+2.11（旧+2.21からわずかに減少）→ まだ過小と判定、
+#   半歩調整を実装：PER_RACE 1.5→2.33, MAX 3.0→4.66。
+#
+# 次のタスク（未着手）：優先順位(B) 昇級(僅差勝ち)の符号逆転（実効倍率
+# -1.41、v3.21-v3.26のどの修正でも解消せず）の実データ調査に着手する。
 
 # ── v3.20（2026/9/17）：NAR長期休養ボーナスを-1.0→-2.9に増額 ──
 # v3.19（反転後1ラウンド目）のrecalibrate.pyで実効倍率+4.81（現行-1.0は
@@ -341,6 +365,7 @@ from calculator import (
     BEST_BONUS_FACTOR,
     INSTABILITY_FACTOR,
     CLASS_BASE,             # Jpn1〜3等、JRA側の基準値を交流重賞判定に流用
+    GRADE_BONUS_TABLE,      # v3.27追加：NAR専用GRADE_BONUS_TABLE_NARの元テーブル
     calc_distance_aptitude_bonus,
     calc_grade_bonus,
     _detect_grade_key,
@@ -519,10 +544,28 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 8.0
 # 初期値は根拠となるデータが無いため、v1.9で「二重計上」を理由に廃止された
 # REGION_TRANSFER_BONUS_PER_RACE/MAX（当時1.5/3.0pt）と同水準の保守的な
 # 値から開始し、他のタグと同様に再収集→recalibrate.py→半分反映で調整する。
+# v3.25検証時点：降格(クラス)は9/25再キャリブレーションでratio+1.00と出た
+# ため「おおむね妥当」と判定、変更なし。
 NAR_CLASS_DEMOTION_BONUS_PER_RACE = 1.0
 NAR_CLASS_DEMOTION_BONUS_MAX = 3.0
-NAR_REGION_DEMOTION_BONUS_PER_RACE = 1.5
-NAR_REGION_DEMOTION_BONUS_MAX = 3.0
+
+# v3.27（2026/9/25）：降格(地区)は9/25再キャリブレーションでratio+2.11
+# （3.26b再収集・新scraper後のデータ）とまだ過小判定のため、いつもの
+# 半歩反映方針（現行値とimplied値の中間）でPER_RACE/MAXとも同倍率
+# （×約1.555）で引き上げ。1.5+0.5*(1.5*2.11-1.5)=2.333、
+# 3.0+0.5*(3.0*2.11-3.0)=4.665。
+NAR_REGION_DEMOTION_BONUS_PER_RACE = 2.33
+NAR_REGION_DEMOTION_BONUS_MAX = 4.66
+
+# v3.27（2026/9/25）：格B専用テーブル（NAR用）。GRADE_BONUS_TABLE（calculator.py・
+# JRA/NAR共有）をそのまま書き換えると、NARの実効倍率(+5.90)がJRA側の
+# G1〜L格ボーナスにも適用されてしまう（JRA側はこの倍率で再測定していない）
+# ため、calc_grade_bonus()のgrade_table override引数を使ってNAR専用の
+# 値をここに新設する。半歩反映方針：implied値＝現行×5.90、半歩＝現行×3.45
+# （＝現行+0.5*(現行×5.90-現行)）。全キー一律×3.46（丸め後の実際の倍率）。
+GRADE_BONUS_TABLE_NAR = {
+    key: round(value * 3.46, 3) for key, value in GRADE_BONUS_TABLE.items()
+}
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
 # NAR専用の値で上書き。JRA側（calculator.py）はDIST_GOOD_FINISH_BONUS={1:1.2,
@@ -1832,8 +1875,12 @@ def calc_phase1_nar(
             pass
 
     # ── 格ボーナス（Jpn1〜3等の交流重賞実績。calculator.pyの関数をそのまま流用）
+    # v3.27：grade_table=GRADE_BONUS_TABLE_NARを渡すことで、NAR専用の
+    # 半歩反映済み倍率（×3.46）を使う。JRA側（calculator.py）は
+    # grade_table未指定＝GRADE_BONUS_TABLE（無変更）のまま。
     if use_grade_bonus:
-        grade_b = calc_grade_bonus(past_races_all, age_limited=False, classic_distance=False)
+        grade_b = calc_grade_bonus(past_races_all, age_limited=False, classic_distance=False,
+                                    grade_table=GRADE_BONUS_TABLE_NAR)
         if grade_b > 0:
             result.phase1_score = round(result.phase1_score - grade_b, 3)
             result.ability_avg  = round(result.ability_avg  - grade_b, 3)
