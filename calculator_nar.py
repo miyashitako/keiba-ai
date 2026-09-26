@@ -37,8 +37,20 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.27-nar_grade_b_override_and_region_demotion_halfstep"
+__version__ = "3.28-momentum_bonus_margin_sign_fix"
 
+# ── v3.28（2026/9/26）：calc_momentum_bonus_nar()の重大バグ修正 ──────
+# 「昇級(僅差勝ち)」の実効倍率符号逆転（3ラウンド連続再現）を実データで
+# 調査した結果、前走1着馬のmargin（netkeiba生データでは2着との差を負値
+# で記録）をabs()せずに0.5/0.2と比較していたバグを発見・修正（詳細は
+# calc_momentum_bonus_nar()内のコメント参照）。JRA側calculator.pyにも
+# 同一バグがあり、そちらもv2.7で同時修正済み。
+# 影響：これまで前走1着で昇級した馬は勝ち方によらず全馬「昇級(僅差勝ち)」
+# （ペナルティ）に分類されており、「昇級(圧勝)」「昇級(順当勝ち)」（ボーナス）
+# はほぼ発生していなかった（recalibrate.py実行時に出現数不足で除外され
+# 続けていたのはこれが原因）。修正後は3タグとも再キャリブレーションが
+# 必要（旧データでの各タグの数値は参考にならない）。
+#
 # ── v3.27（2026/9/25）：3.26b再収集分の再キャリブレーションを反映 ──────
 # calc_version "3.26b-nar_kumi_gap_proportional_discount"（新scraper＋組差
 # 割合ディスカウント＋title補完後、48079頭／4710レース、拡大期間4〜9月）
@@ -1428,9 +1440,21 @@ def calc_momentum_bonus_nar(
             return 1.5, f"昇級勢い(通算{win_count}勝)"
 
         # 前走1着：margin（2着馬との着差）で勝ち方を判定
-        if prev.margin >= 0.5:
+        # v3.28（2026/9/26）：重大バグ修正。JRA版calc_momentum_bonus()と
+        # 同一の符号バグ（詳細はcalculator.py v2.7のコメント参照）。
+        # netkeibaの着差生データは1着馬自身の行では「2着との差」を負値
+        # （またはごく僅差なら0.0）で記録しており、abs()せずに0.5/0.2と
+        # 比較していたため、前走1着で昇級した馬は勝ち方によらず全馬
+        # 「昇級(僅差勝ち)」に落ちていた。recalibrate.pyの「昇級(僅差勝ち)」
+        # 符号逆転（実効倍率-1.36〜-1.43、3ラウンド連続）の実データ調査
+        # （extract_tag_examples.py→debug_kinsa_margin.py→
+        # debug_margin_raw.py）で発覚。修正後は3タグとも再キャリブレー
+        # ションが必要（旧-0.75/+0.5/+1.5という定数値は旧バグ下での
+        # 数値であり、参考にならない）。
+        prev_margin_abs = abs(prev.margin)
+        if prev_margin_abs >= 0.5:
             return 1.5, "昇級(圧勝)"
-        elif prev.margin >= 0.2:
+        elif prev_margin_abs >= 0.2:
             return 0.5, "昇級(順当勝ち)"
         else:
             return -0.75, "昇級(僅差勝ち)"
