@@ -37,7 +37,12 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.28-momentum_bonus_margin_sign_fix"
+__version__ = "3.29-momentum_bonus_recalibrate_after_sign_fix"
+
+# ── v3.29（2026/9/26）：v3.28バグ修正後の初再キャリブレーションを反映 ──
+# 「昇級(圧勝)」+1.5→3.35（ratio+3.47、このタグとして初めて有意なn数）、
+# 「昇級(僅差勝ち)」-0.75→-2.69（ratio+6.16、方向は正しく罰則が過小）。
+# 「昇級(順当勝ち)」はratio+0.38で非有意のため変更なし。
 
 # ── v3.28（2026/9/26）：calc_momentum_bonus_nar()の重大バグ修正 ──────
 # 「昇級(僅差勝ち)」の実効倍率符号逆転（3ラウンド連続再現）を実データで
@@ -1453,11 +1458,16 @@ def calc_momentum_bonus_nar(
         # 数値であり、参考にならない）。
         prev_margin_abs = abs(prev.margin)
         if prev_margin_abs >= 0.5:
-            return 1.5, "昇級(圧勝)"
+            # v3.29（2026/9/26）：v3.28のabs()修正後の初再キャリブレーションで
+            # ratio+3.47（このタグとして初めて有意なn数）。半歩反映：
+            # 1.5*(1+(3.47-1)/2)=3.35
+            return 3.35, "昇級(圧勝)"
         elif prev_margin_abs >= 0.2:
             return 0.5, "昇級(順当勝ち)"
         else:
-            return -0.75, "昇級(僅差勝ち)"
+            # v3.29（2026/9/26）：v3.28のabs()修正後の初再キャリブレーションで
+            # ratio+6.16（有意）。半歩反映：0.75*(1+(6.16-1)/2)=2.685
+            return -2.69, "昇級(僅差勝ち)"
     return 0.0, ""
 
 
