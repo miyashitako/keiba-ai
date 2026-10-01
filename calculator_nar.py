@@ -37,7 +37,10 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.31-momentum_bonus_third_halfstep"
+__version__ = "3.32-region_demotion_second_halfstep"
+
+# ── v3.32（2026/10/2）：降格(地区)の二段階目半歩 ──
+# PER_RACE 2.33→2.82、MAX 4.66→5.64（ratio+1.42、まだ過小）。
 
 # ── v3.31（2026/9/30）：昇級(圧勝)・昇級(僅差勝ち)の三段階目半歩 ──
 # 「昇級(圧勝)」4.27→4.70（ratio+1.20、まだ過小）、「昇級(僅差勝ち)」
@@ -581,8 +584,11 @@ NAR_CLASS_DEMOTION_BONUS_MAX = 3.0
 # 半歩反映方針（現行値とimplied値の中間）でPER_RACE/MAXとも同倍率
 # （×約1.555）で引き上げ。1.5+0.5*(1.5*2.11-1.5)=2.333、
 # 3.0+0.5*(3.0*2.11-3.0)=4.665。
-NAR_REGION_DEMOTION_BONUS_PER_RACE = 2.33
-NAR_REGION_DEMOTION_BONUS_MAX = 4.66
+# v3.32（2026/10/2）：10/2時点の再キャリブレーションでratio+1.42とまだ
+# 過小のため二段階目の半歩。2.33*(1+(1.42-1)/2)=2.82、
+# 4.66*(1+(1.42-1)/2)=5.64。
+NAR_REGION_DEMOTION_BONUS_PER_RACE = 2.82
+NAR_REGION_DEMOTION_BONUS_MAX = 5.64
 
 # v3.27（2026/9/25）：格B専用テーブル（NAR用）。GRADE_BONUS_TABLE（calculator.py・
 # JRA/NAR共有）をそのまま書き換えると、NARの実効倍率(+5.90)がJRA側の
