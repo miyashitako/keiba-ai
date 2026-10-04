@@ -37,7 +37,13 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.33-region_demotion_third_halfstep"
+__version__ = "3.34-decouple_grade_bonus_table_from_jra"
+
+# ── v3.34（2026/10/4）：GRADE_BONUS_TABLE_NARをJRA本体から分離 ──
+# JRA側calculator.py v2.11でGRADE_BONUS_TABLE自体を再キャリブレーション
+# するのに合わせ、動的に`GRADE_BONUS_TABLE * 3.46`で計算していた
+# GRADE_BONUS_TABLE_NARを固定リテラルに変更（JRA側の今後の変更に
+# NAR側が連動しないようにするため）。数値自体はv3.27時点から不変。
 
 # ── v3.33（2026/10/3）：降格(地区)の三段階目半歩 ──
 # PER_RACE 2.82→3.09、MAX 5.64→6.18（ratio+1.19、まだ過小だが収束が近い）。
@@ -395,7 +401,6 @@ from calculator import (
     BEST_BONUS_FACTOR,
     INSTABILITY_FACTOR,
     CLASS_BASE,             # Jpn1〜3等、JRA側の基準値を交流重賞判定に流用
-    GRADE_BONUS_TABLE,      # v3.27追加：NAR専用GRADE_BONUS_TABLE_NARの元テーブル
     calc_distance_aptitude_bonus,
     calc_grade_bonus,
     _detect_grade_key,
@@ -598,8 +603,22 @@ NAR_REGION_DEMOTION_BONUS_MAX = 6.18
 # ため、calc_grade_bonus()のgrade_table override引数を使ってNAR専用の
 # 値をここに新設する。半歩反映方針：implied値＝現行×5.90、半歩＝現行×3.45
 # （＝現行+0.5*(現行×5.90-現行)）。全キー一律×3.46（丸め後の実際の倍率）。
+# v2.11（2026/10/4）：当初はGRADE_BONUS_TABLE（calculator.py）のv2.6時点の
+# 値から`value * 3.46`で動的に計算していたが、JRA側GRADE_BONUS_TABLEを
+# 独自に再キャリブレーションする（v2.11でGRADE_BONUS_TABLE自体を変更）に
+# あたり、動的計算のままだとJRA側の変更がNAR側にも連動してしまう
+# （NARはNAR自身のデータで測った倍率でしか動かしてはいけない）。そのため
+# ここで値を固定のリテラルに変更し、GRADE_BONUS_TABLEの変更から完全に
+# 独立させる。値そのものはv3.27時点の計算結果（元の0.6/0.5等 × 3.46）を
+# そのまま踏襲しており、今回の変更による数値の変化はない。
 GRADE_BONUS_TABLE_NAR = {
-    key: round(value * 3.46, 3) for key, value in GRADE_BONUS_TABLE.items()
+    "G1": 10.38, "Jpn1": 10.38,
+    "G2": 6.92, "Jpn2": 6.92,
+    "G3": 4.152, "Jpn3": 4.152,
+    "重賞": 2.076, "OP": 2.076, "オープン": 2.076,
+    "L": 1.73,
+    "JGI": 10.38, "JGII": 6.92, "JGIII": 4.152,
+    "J・G1": 10.38, "J・G2": 6.92, "J・G3": 4.152,
 }
 
 # ── NAR距離好走ボーナス（v2.8追加：calculator.pyのDIST_GOOD_FINISH_BONUSを
