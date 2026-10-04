@@ -162,11 +162,9 @@ backtest_mode = st.toggle(
 # いるだけで、実際にはどこからも呼び出していなかった（＝NARの予想には
 # 一切反映されていなかった）。JRA版app.pyと同じロジック（脚質×展開×馬場
 # 状態×競馬場特性）をそのまま流用し、Phase3の後に適用する。
-use_pace_bias = st.toggle(
-    "展開・トラックバイアス補正を使う", value=True,
-    help="脚質と展開・馬場状態・競馬場特性から有利不利を補正（JRA版と同じロジック）。"
-         "例：ダート重・不良馬場では逃げ・先行馬にボーナス。",
-)
+# v0.4（2026/10/5）：on/offトグルを廃止し常時適用に変更（こうすけさん
+# 指摘：そもそもオフにする理由がなく、特に「ダート重・不良馬場→逃げ
+# 先行有利」は常に発動すべき。JRA版app.py v2.13と同時対応）。
 
 run = st.button("検証を実行" if backtest_mode else "予想を実行", type="primary")
 
@@ -222,40 +220,39 @@ if run:
     # ご質問にあった「ダート重・不良馬場→逃げ先行有利」はこの関数の中の
     # 「race_surface=='ダ' and is_heavy: is_frontにボーナス」の分岐で
     # 既にカバーされている（calculator.py側、NAR側ロジックに変更なし）。
-    if use_pace_bias:
-        running_styles = {
-            h.number: cn.calc_running_style(h.past_races)
-            for h in horses
-        }
-        all_styles = [(n, s) for n, s in running_styles.items() if s]
-        field_size = len(horses)
-        is_hurdle_race = "障" in (race_info.race_class or "")  # NARにはほぼ存在しないが念のため
-        horse_map_pb = {h.number: h for h in horses}
+    running_styles = {
+        h.number: cn.calc_running_style(h.past_races)
+        for h in horses
+    }
+    all_styles = [(n, s) for n, s in running_styles.items() if s]
+    field_size = len(horses)
+    is_hurdle_race = "障" in (race_info.race_class or "")  # NARにはほぼ存在しないが念のため
+    horse_map_pb = {h.number: h for h in horses}
 
-        import copy as _cp_pb
-        pace_adjusted = []
-        for r in adjusted:
-            if is_hurdle_race:
-                pace_adjusted.append(r)
-                continue
-            h_pb = horse_map_pb.get(r.horse_number)
-            style = running_styles.get(r.horse_number, "")
-            frame = h_pb.frame if h_pb else 0
-            pb, plabel = cn.calc_pace_bias_bonus(
-                r.horse_name, r.horse_number, frame,
-                style, field_size, all_styles,
-                venue, race_info.surface or "", race_info.distance or 0,
-                race_info.direction or "", race_info.track_cond or "",
-                1, False, False,
-            )
-            if pb != 0.0:
-                nr = _cp_pb.copy(r)
-                nr.phase2_score = round(nr.phase2_score - pb, 3)
-                nr.note = (nr.note + f" [展開:{plabel}]").strip()
-                pace_adjusted.append(nr)
-            else:
-                pace_adjusted.append(r)
-        adjusted = sorted(pace_adjusted, key=lambda x: x.phase2_score)
+    import copy as _cp_pb
+    pace_adjusted = []
+    for r in adjusted:
+        if is_hurdle_race:
+            pace_adjusted.append(r)
+            continue
+        h_pb = horse_map_pb.get(r.horse_number)
+        style = running_styles.get(r.horse_number, "")
+        frame = h_pb.frame if h_pb else 0
+        pb, plabel = cn.calc_pace_bias_bonus(
+            r.horse_name, r.horse_number, frame,
+            style, field_size, all_styles,
+            venue, race_info.surface or "", race_info.distance or 0,
+            race_info.direction or "", race_info.track_cond or "",
+            1, False, False,
+        )
+        if pb != 0.0:
+            nr = _cp_pb.copy(r)
+            nr.phase2_score = round(nr.phase2_score - pb, 3)
+            nr.note = (nr.note + f" [展開:{plabel}]").strip()
+            pace_adjusted.append(nr)
+        else:
+            pace_adjusted.append(r)
+    adjusted = sorted(pace_adjusted, key=lambda x: x.phase2_score)
 
     # ── フェッチ結果をセッションに保存（Phase5をあとから適用するため）──
     st.session_state.nar_race_info       = race_info

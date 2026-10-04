@@ -349,12 +349,9 @@ if st.session_state.phase2_results:
         use_dist_apt = st.toggle("距離適性補正を使う", value=True,
                                  help="±200m以内の好走実績・スタミナ証明でボーナス。距離実績なしはペナルティ")
 
-    col_opt5, col_opt6 = st.columns(2)
-    with col_opt5:
-        use_pace_bias = st.toggle("展開・トラックバイアス補正を使う", value=True,
-                                  help="脚質と展開・馬場・開催週から有利不利を補正")
-    with col_opt6:
-        pass
+    # v2.13（2026/10/5）：「展開・トラックバイアス補正」のon/offトグルを廃止し、
+    # 常時適用に変更（こうすけさん指摘：そもそもオフにする理由がなく、特に
+    # 「ダート重・不良馬場→逃げ先行有利」は常に発動すべき）。
 
     # 馬齢限定戦トグル（自動判定を上書き可能）
     auto_age = st.session_state.get("age_limited_auto", False)
@@ -412,8 +409,8 @@ if st.session_state.phase2_results:
             )
         st.session_state.phase3_results = list(ranking_base)  # Phase3済みをキャッシュ
 
-    # ── 展開・トラックバイアス補正（Phase3の後に適用）
-    if use_pace_bias and ri and not st.session_state.phase5_applied:
+    # ── 展開・トラックバイアス補正（Phase3の後に適用。v2.13で常時適用化）
+    if ri and not st.session_state.phase5_applied:
         _styles     = st.session_state.get("running_styles", {})
         _all_styles = [(n, s) for n, s in _styles.items() if s]
         _field_size = len(st.session_state.horses)
