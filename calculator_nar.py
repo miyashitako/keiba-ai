@@ -37,7 +37,11 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.34-decouple_grade_bonus_table_from_jra"
+__version__ = "3.35-recent_form_penalty_cap_halfstep"
+
+# ── v3.35（2026/10/6）：近走不振ペナルティCAPの半歩 ──
+# NAR_FORM_PENALTY_CAP 6.0→8.55（ratio+1.85）。NAR_COMBINED_PENALTY_CAPは
+# 自動連動（8.55+2.0=10.55）。
 
 # ── v3.34（2026/10/4）：GRADE_BONUS_TABLE_NARをJRA本体から分離 ──
 # JRA側calculator.py v2.11でGRADE_BONUS_TABLE自体を再キャリブレーション
@@ -1380,13 +1384,19 @@ NAR_LARGE_MARGIN_PENALTY = [     # (着差の下限, ペナルティ) ※大き�
 # 引き続き有意・同方向のため、同じ考え方でCAPを5.7→6.0（倍率1.0526）に
 # 引き上げる。近走不振×低走数の交互作用も引き続き有意
 # （implied+2.91pt、現行2.4pt）→ 半分反映を継続。
+#
+# v3.35（2026/10/6・11巡目）：降格(地区)・格B(JRA)等の対応を挟んでの
+# 久々の再検証で、ratio+1.85（有意、安定）のため半分反映を継続。
+# multiplier=1+(1.85-1)/2=1.425。CAPを6.0→8.55に引き上げる。近走不振×
+# 低走数の交互作用は直近複数ラウンドで非有意（ratio+0.34〜0.43）と
+# なったため、今回はNAR_FORM_LOW_RUNS_EXTRA_PENALTY（2.7）は変更しない。
 NAR_FORM_MARGIN_OK = 0.5        # この着差以内なら着外でも「不振」扱いしない
 NAR_FORM_PENALTY_TIERS = [      # (着差の上限, その走の不振ポイント) ※昇順で判定
     (1.5, 1.2),
     (3.0, 1.7),
     (999.0, 3.3),
 ]
-NAR_FORM_PENALTY_CAP = 6.0      # 近走不振ペナルティ単体の上限（旧5.7）
+NAR_FORM_PENALTY_CAP = 8.55     # 近走不振ペナルティ単体の上限（旧6.0）
 NAR_FORM_MIN_POOR_RACES = 2     # この走数以上「不振」該当で初めて発動
 # v3.4新規：他の生ペナルティ（大差負け・最下位圏）とのスタッキング分の
 # 余裕（+2.0pt、最下位圏ペナルティの単発最大値相当）を見込んだ合算上限。
