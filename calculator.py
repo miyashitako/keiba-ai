@@ -4,7 +4,12 @@ Phase1〜Phase4 を固定数式で計算する
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.23-grade_b_momentum_form_halfstep_plus_rest_bump"
+__version__ = "2.24-moderate_rest_halfstep"
+
+# ── v2.24（2026/10/12）：適度な休養のみ、通常の半歩に戻す ──
+# v2.23の倍率2.0ステップで係数がぴたり半分になり効果の実在を確認。
+# ratio+1.63（旧3.07から大幅縮小）で半歩：-1.0→-1.32。格B・昇級系・
+# 近走不振・距離好走系は今回変更なし（測定ノイズの範囲内、収束とみなす）。
 
 # ── v2.23（2026/10/11）：距離好走系収束後のクリーンな基準点で複数タグ再開 ──
 # 格B・昇級系・近走不振は通常の半歩：
@@ -2196,7 +2201,7 @@ def calc_phase1(
 
     # ── 出走間隔補正（v1.1追加）
     # 今回レース日と前走日付の差から休養期間を算出
-    # 70〜112日（10〜16週）: 適度な休養 → -1.0pt（ボーナス、旧-0.5pt）
+    # 70〜112日（10〜16週）: 適度な休養 → -1.32pt（ボーナス、旧-1.0pt）
     # 112日超（16週超）    : 長期休養   → +2.0pt（ペナルティ）
     _rest_index_offset = 0  # v2.5追加：長期休養時、格B・距離好走の時系列
                              # 減衰indexを前倒しする（後述）ためのオフセット。
@@ -2222,9 +2227,13 @@ def calc_phase1(
                     # 判断）。倍率2.0で-0.5→-1.0（implied+3.07pt=-1.535には
                     # 届かせず、観測されたratio自体に他タグ同様の測定アーティ
                     # ファクト混入の疑いが残るため、フルには寄せない）。
-                    result.phase1_score = round(result.phase1_score - 1.0, 3)
-                    result.ability_avg  = round(result.ability_avg  - 1.0, 3)
-                    result.note = (result.note + f" [適度な休養({_days}日):-1.0]").strip()
+                    # v2.24（2026/10/12）：倍率2.0の検証で係数がぴたり半分に
+                    # なり効果の実在を確認。ratio+1.63（旧3.07から大幅に
+                    # 縮小、やはりアーティファクトが大きく混入していた）。
+                    # 以降は通常の半歩に戻す：-1.0→-1.32。
+                    result.phase1_score = round(result.phase1_score - 1.32, 3)
+                    result.ability_avg  = round(result.ability_avg  - 1.32, 3)
+                    result.note = (result.note + f" [適度な休養({_days}日):-1.32]").strip()
                 elif _days > 112:
                     result.phase1_score = round(result.phase1_score + 2.0, 3)
                     result.ability_avg  = round(result.ability_avg  + 2.0, 3)
