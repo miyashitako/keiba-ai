@@ -37,7 +37,38 @@ import statistics
 from typing import Optional
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "3.39-form_up_nonwin_demotion_down"
+__version__ = "3.41-replicated_polish_region_up"
+
+# ── v3.41（2026/10/20）：3期間で再現した小さな残りの調整＋高知・兵庫の地区補正の増額 ──
+# 検証データ2期間（冬期2025-11-24〜2026-04-23／前年同季2025-04-24〜2025-09-23、v3.40）で
+# 古い値（v3.35相当）に戻すと検証ΔLL -37.9／-83.2（調整用は約-93）で、v3.40までの
+# 調整は別期間でも通用していた。そのうえで、調整用・冬期・前年同季の3期間すべてで
+# 同じ向きに出たタグ別の残りを、同時に適用して再評価（scan_scale.py --candidate、
+# 昇級(前走非勝利)0.5／中央転入0.9／長期休養0.75／降格(クラス)0.75／距離好走3着1.5）：
+#   検証ΔLL +13.3(z3.8)／+9.7(z5.8)／+16.8(z4.7)、単独の合計とほぼ一致（重なりなし）。
+#   昇級(前走非勝利) ×0.5：-0.81→-0.405、低走数加算 0.57→0.285
+#   中央転入         ×0.9：1走6.0→5.4、上限14.5→13.0、低走数割引8.0→7.2
+#   長期休養(>112日) ×0.75：-3.9→-2.9
+#   降格(クラス)     ×0.75：1走0.4→0.3、上限1.2→0.9
+#   距離好走3着      ×1.5：2.5→3.75、低走数加算 5.4→8.1
+# 地区補正（3期間の実測/期待：高知1.41(z+4.3)／兵庫1.21(z+2.8)／北海道1.04／岩手1.03）：
+#   高知 2.9→4.2、兵庫 1.9→2.8（推定の約8割）。北海道2.3・岩手-2.1は据え置き。
+# 近走不振・距離好走1着/2着・格Bは変更なし（冬期の近走不振1.7倍は前年同季で再現せず）。
+# 注意：この2検証期間は以後「調整用」扱い。2026-09-24以降の新規レースを前向き検証用に残す。
+
+# ── v3.40（2026/10/18）：移籍元地区による補正の新設（region_scan.pyに基づく）──
+# v3.39データ（4672R/47766頭、日付順4分割の交差検証）で、Phase1スコアを入れた
+# 条件付きロジット（勝敗~スコア+移籍元の直近3走での走数）を当てはめた結果：
+#   勝利数の実測/期待：高知1.89(z+5.3)／北海道1.57(+4.1)／兵庫1.47(+3.9)／岩手0.63(-2.3)
+#   1走あたりの推定（スコア換算）：高知-4.41pt／北海道-3.47／兵庫-2.86／岩手+3.99（不利）
+#   検証ΔLL：4地区のcountモデルで+29.6（±9.2、z3.2）。dummyモデルより良好＝走数が
+#   多いほど効く。南関東は+0.23ptで有意でなく、既存の降格(地区・南関東経験)が適正。
+# 縮小後の約2/3を採用し、南関東ボーナスと同じ「直近3走の該当地区走数×1走あたり」
+# 方式、上限2走分で実装（3走時の線形性は未検証のため）。東海・北陸・佐賀は補正なし。
+#   NAR_ORIGIN_REGION_BONUS_PER_RACE（スコアから引く点数。負＝不利側）：
+#     高知2.9／北海道2.3／兵庫1.9／岩手-2.1
+# 診断タグ「移籍元(地区):N走」は従来どおり記録（region_scan.pyの入力）。
+# 補正後にregion_scan.pyを再実行し、各地区のγが0付近に落ちたかを確認すること。
 
 # ── v3.39（2026/10/17）：scan_scale.py（検証尤度）に基づく3タグの同時調整 ──
 # 3.37データ（4672R/47766頭、日付順4分割の交差検証）でのスキャン結果
@@ -606,10 +637,10 @@ REGION_TRANSFER_BONUS_MAX = 3.0
 # （現行13.8pt、ギャップ1.39pt）で、引き続き半分反映を継続。低走数側の
 # 実効値もimplied+6.77pt相当・現行実効6.2pt（13.8-7.6）で、ギャップ
 # 0.57pt。
-CENTRAL_TRANSFER_BONUS_PER_RACE = 6.0
-CENTRAL_TRANSFER_BONUS_MAX = 14.5
+CENTRAL_TRANSFER_BONUS_PER_RACE = 5.4    # v3.41：×0.9（旧6.0）
+CENTRAL_TRANSFER_BONUS_MAX = 13.0         # v3.41：×0.9（旧14.5。表示が小数1桁のため13.05→13.0）
 CENTRAL_TRANSFER_LOW_RUNS_THRESHOLD = 2
-CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 8.0
+CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 7.2   # v3.41：×0.9（旧8.0）
 
 # ── v3.21（2026/9/17）：降格ボーナス新設（クラス降格・地区降格）─────────
 # 背景：これまで「格上→格下」の移動は、calc_momentum_bonus_nar()が
@@ -632,8 +663,8 @@ CENTRAL_TRANSFER_LOW_RUNS_DISCOUNT = 8.0
 # 値から開始し、他のタグと同様に再収集→recalibrate.py→半分反映で調整する。
 # v3.25検証時点：降格(クラス)は9/25再キャリブレーションでratio+1.00と出た
 # ため「おおむね妥当」と判定、変更なし。
-NAR_CLASS_DEMOTION_BONUS_PER_RACE = 0.4   # v3.39：×0.4（旧1.0）
-NAR_CLASS_DEMOTION_BONUS_MAX = 1.2         # v3.39：×0.4（旧3.0）
+NAR_CLASS_DEMOTION_BONUS_PER_RACE = 0.3   # v3.41：×0.75（v3.39で0.4、元1.0）
+NAR_CLASS_DEMOTION_BONUS_MAX = 0.9         # v3.41：×0.75（v3.39で1.2、元3.0）
 
 # v3.27（2026/9/25）：降格(地区)は9/25再キャリブレーションでratio+2.11
 # （3.26b再収集・新scraper後のデータ）とまだ過小判定のため、いつもの
@@ -645,6 +676,9 @@ NAR_CLASS_DEMOTION_BONUS_MAX = 1.2         # v3.39：×0.4（旧3.0）
 # 4.66*(1+(1.42-1)/2)=5.64。
 # v3.33（2026/10/3）：ratio+1.19まで縮小、まだ過小のため三段階目の半歩。
 # 2.82*(1+(1.19-1)/2)=3.09、5.64*(1+(1.19-1)/2)=6.18。
+# v3.40：移籍元地区の補正（南関東以外。スコアから引く点数。負は不利側）
+NAR_ORIGIN_REGION_BONUS_PER_RACE = {"高知": 4.2, "北海道": 2.3, "兵庫": 2.8, "岩手": -2.1}   # v3.41：高知2.9→4.2、兵庫1.9→2.8
+NAR_ORIGIN_REGION_MAX_RUNS = 2   # 直近3走のうち補正対象にする最大走数
 NAR_REGION_DEMOTION_BONUS_PER_RACE = 3.09
 NAR_REGION_DEMOTION_BONUS_MAX = 6.18
 
@@ -742,7 +776,7 @@ GRADE_BONUS_TABLE_NAR = {
 #     0.13→0.27→0.37ptと徐々に拡大）が、1・2着（0.82/0.61pt）に比べれば
 #     まだ小さい。次回はv3.8の着差大無効撤去で距離好走タグの母集団自体が
 #     変わるため、今回は静観し次回のデータで改めて判断する。
-NAR_DIST_GOOD_FINISH_BONUS = {1: 12.5, 2: 9.39, 3: 2.5}
+NAR_DIST_GOOD_FINISH_BONUS = {1: 12.5, 2: 9.39, 3: 3.75}   # v3.41：3着×1.5（旧2.5）
 
 # ── 通常の成績（ability_avg）の参照窓拡大＋時系列減衰（v3.15追加）───────
 # 従来はtargets=past_races[:3]・WEIGHT_RECENT=[0.5,0.3,0.2]で「直近3走で
@@ -822,7 +856,7 @@ NAR_DIST_BONUS_MARGIN_THRESHOLDS = [
 # 「距離好走1着×低走数」は撤去済み（0のまま。今回もp=0.173で非有意）。
 NAR_DIST_LOW_RUNS_THRESHOLD = 2
 NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_1ST = 0.0   # v3.6で撤去（旧0.9。round3以降6回連続非有意のため）
-NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 5.4
+NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_3RD = 8.1   # v3.41：×1.5（旧5.4）
 NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 2.5
 
 # v3.3新規実装：昇級(前走非勝利)×低走数の交互作用が今回有意
@@ -834,7 +868,7 @@ NAR_DIST_GOOD_FINISH_LOW_RUNS_EXTRA_2ND = 2.5
 # v3.5：引き続き有意（implied+1.86pt、現行1.3pt）→ 半分反映を継続。
 # v3.6：引き続き有意（implied+1.96pt、現行1.6pt）→ 半分反映を継続。
 # v3.9：引き続き有意（implied+2.03pt、現行1.8pt）→ 半分反映を継続。
-NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 0.57   # v3.39：×0.3（旧1.9）
+NAR_MOMENTUM_LOW_RUNS_EXTRA_PENALTY = 0.285   # v3.41：×0.5（v3.39で0.57、元1.9）
 
 
 def get_region_nar(venue: str) -> str:
@@ -1530,7 +1564,7 @@ def calc_momentum_bonus_nar(
             # v3.9（10巡目）：引き続き有意（implied+2.86pt、現行2.6pt、
             # ギャップ0.26pt）のため、同じ考え方で-2.7ptに引き上げる
             # （旧-2.6pt）。
-            return -0.81, "昇級(前走非勝利)"   # v3.39：×0.3（旧-2.7。scan_scale.pyで0.0まで単調に改善）
+            return -0.405, "昇級(前走非勝利)"   # v3.41：×0.5（v3.39で-0.81、元-2.7）
 
         # 直近5走（取得できた分だけ）の通算勝利数による勢い判定
         recent5 = [pr for pr in past_races[:5] if pr.finish > 0]
@@ -2002,10 +2036,11 @@ def calc_phase1_nar(
                     # z=2.29 p=0.022 ★有意）で実効倍率+1.66（現行-2.9はまだ
                     # 過小）と出たため、同じ半分反映方針で-2.9→-3.9に増額。
                     # implied基準：-2.9 + 0.5*(-2.9*1.66-(-2.9)) = -3.9。
-                    result.phase1_score = round(result.phase1_score - 3.9, 3)
-                    result.ability_avg  = round(result.ability_avg  - 3.9, 3)
-                    result.best_time    = round(result.best_time    - 3.9, 3)
-                    result.note = (result.note + f" [長期休養({_days}日):-3.9]").strip()
+                    # v3.41：3期間で再現（0.75倍が検証ΔLL +1.6/+2.7/+2.1）→ -3.9→-2.9
+                    result.phase1_score = round(result.phase1_score - 2.9, 3)
+                    result.ability_avg  = round(result.ability_avg  - 2.9, 3)
+                    result.best_time    = round(result.best_time    - 2.9, 3)
+                    result.note = (result.note + f" [長期休養({_days}日):-2.9]").strip()
                     _rest_index_offset = 1
         except Exception:
             pass
@@ -2201,6 +2236,22 @@ def calc_phase1_nar(
                 _origin_region_counts[_pr_region] = _origin_region_counts.get(_pr_region, 0) + 1
         for _region, _cnt in _origin_region_counts.items():
             result.note = (result.note + f" [移籍元({_region}):{_cnt}走]").strip()
+
+        # v3.40：移籍元地区による補正（診断タグの走数に基づき加減点）
+        _origin_adj = 0.0
+        _origin_adj_parts = []
+        for _region, _cnt in _origin_region_counts.items():
+            _per = NAR_ORIGIN_REGION_BONUS_PER_RACE.get(_region, 0.0)
+            if _per:
+                _n = min(_cnt, NAR_ORIGIN_REGION_MAX_RUNS)
+                _origin_adj += _n * _per
+                _origin_adj_parts.append(f"{_region}{_n}走")
+        if _origin_adj:
+            result.phase1_score = round(result.phase1_score - _origin_adj, 3)
+            result.ability_avg  = round(result.ability_avg  - _origin_adj, 3)
+            result.best_time    = round(result.best_time    - _origin_adj, 3)
+            result.note = (result.note
+                           + f" [地区補正({'・'.join(_origin_adj_parts)}):{-_origin_adj:+.1f}]").strip()
 
     return result
 
