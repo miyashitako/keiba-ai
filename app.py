@@ -30,13 +30,20 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── フィールド相対斤量補正レート（v1.5追加）
-# 1kg = このpt数だけスコアを増減。小さいほど良スコアなので
-#   フィールド平均より軽い → スコア減（有利）
-#   フィールド平均より重い → スコア増（不利）
-# 現在は案B（全レース一律適用）で検証中。
-# 将来的にハンデ戦判定が安定したら案A（ハンデ戦のみ）に切り替え可能。
-WEIGHT_FIELD_RATE = 0.5  # pt/kg（v1.5検証：北九州記念で0.3では不足→0.5に変更）
+# ── 重い斤量の不利補正（v1.6：線形・対称の補正を廃止し、重い側のみの一律ペナルティへ）
+# weight_scan.py（JRA v2.26、2期間・計4,266レースの検証）の結果：
+#   ・軽い馬を有利にする線形補正（旧 WEIGHT_FIELD_RATE=0.5pt/kg）は、全期間で検証ΔLLが悪化
+#     （-7.25、z=-4.0）。2期間で符号も一致しなかった（-0.86 / +0.33 pt/kg）。
+#   ・平均より2kg以上重い馬だけは、2期間とも同じ向きで勝ちにくい（実測/期待 0.61・0.80、
+#     全期間0.70）。一律の不利は全期間で +7.7pt(±1.4)、検証ΔLL +15.5(z=2.7)、
+#     2期間で +10.2／+5.0。1〜2kg重いだけの馬には効きが無かった。
+# → 今回レースの全馬斤量平均より WEIGHT_HEAVY_THRESHOLD kg 以上重い馬のスコアに
+#   WEIGHT_HEAVY_PENALTY pt を足す（小さいほど良スコアなので＝不利）。軽い側の有利は付けない。
+# 注：しきい値は2〜3候補から選んでおり、効果量はやや楽観的。ptは全期間推定の約2/3
+#     （2期間のうち小さい方の推定5.0ptにも一致）。NAR（app_nar.py）には入れない
+#     （NARでは重い馬の方がむしろ勝つ向きに出たため）。
+WEIGHT_HEAVY_THRESHOLD = 2.0  # kg：フィールド平均より何kg以上重い馬に適用するか
+WEIGHT_HEAVY_PENALTY = 5.0    # pt：スコアに足す（不利）
 
 st.title("🐎 競馬AI予想システム")
 st.caption("Phase1〜Phase5 | 距離フィルター・競馬場・騎手適性対応 | 答え合わせモード対応(v1.7)")
@@ -461,11 +468,10 @@ if st.session_state.phase2_results:
     else:
         _pace_base = st.session_state.phase3_results or []
 
-    # ── フィールド相対斤量補正（v1.5追加）─────────────────────────────
-    # 今回レースの全馬斤量平均を基準に、軽い馬を有利・重い馬を不利に補正。
-    # 案B（全レース一律）で検証中。
-    # race_info.weight_type == "ハンデ" 判定が安定したら
-    #   「if not ri or ri.weight_type == "ハンデ":」に切り替えて案Aへ移行可能。
+    # ── 重い斤量の不利補正（v1.6：v1.5の線形・対称補正を置き換え）────────
+    # 今回レースの全馬斤量平均より WEIGHT_HEAVY_THRESHOLD kg 以上重い馬にだけ、
+    # 一律で WEIGHT_HEAVY_PENALTY pt を足す（不利）。軽い馬の有利補正は付けない。
+    # 根拠と限界は WEIGHT_HEAVY_* の定義箇所のコメントを参照。
     _horses_for_weight = st.session_state.horses
     _weights = [h.weight_carried for h in _horses_for_weight if h.weight_carried > 0]
     if len(_weights) >= 2:
@@ -478,9 +484,10 @@ if st.session_state.phase2_results:
             if _h_w <= 0:
                 _wt_adjusted.append(r)
                 continue
-            _wt_diff = _field_avg_w - _h_w   # 正=平均より軽い=有利
-            _wt_adj  = round(_wt_diff * WEIGHT_FIELD_RATE, 3)
-            if abs(_wt_adj) >= 0.05:          # 0.05pt未満は表示しない
+            _wt_diff = _field_avg_w - _h_w   # 正=平均より軽い、負=平均より重い
+            # 平均よりしきい値kg以上重い馬にのみ一律の不利（_wt_adjは「スコアから引く量」なので負値）
+            _wt_adj  = -WEIGHT_HEAVY_PENALTY if _wt_diff <= -WEIGHT_HEAVY_THRESHOLD else 0.0
+            if _wt_adj != 0.0:
                 _nr_w = _cp3.copy(r)
                 if use_phase2:
                     _nr_w.phase2_score = round(_nr_w.phase2_score - _wt_adj, 3)
