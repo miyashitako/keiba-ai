@@ -28,6 +28,13 @@ import unicodedata
 import time
 from typing import Optional
 
+try:  # v3.42追加：結果ページの追加項目（年齢・後3F・調教師・馬体重など）。無くても既存機能は動く。
+    from result_extras import build_col_map as _build_extras_col_map, attach_extras as _attach_extras, DEFAULT_NAR as _EXTRAS_DEFAULT
+except ImportError:  # pragma: no cover
+    _build_extras_col_map = None
+    _attach_extras = None
+    _EXTRAS_DEFAULT = {}
+
 # ── RaceData02からのクラス抽出用候補リスト ─────────────────────────
 # 注意：門別3Rの事後検証（2026/7/15）でC4クラスの存在が確認されたため追加。
 # 他場でもA4・B4等の存在は未確認だが、将来の同様の見落としを防ぐため
@@ -641,6 +648,7 @@ def fetch_race_result_nar(race_id: str) -> tuple[RaceInfo, list]:
         raise ValueError("結果テーブルが見つかりませんでした。")
     table = tables[0]
     rows = table.find_all("tr")[1:]
+    _extras_map = _build_extras_col_map(table, _EXTRAS_DEFAULT) if _build_extras_col_map else None
 
     horses = []
     for row in rows:
@@ -697,6 +705,8 @@ def fetch_race_result_nar(race_id: str) -> tuple[RaceInfo, list]:
         h.actual_margin_str = cols[8].get_text(strip=True) if len(cols) > 8 else ""
         h.actual_popularity = cols[9].get_text(strip=True) if len(cols) > 9 else ""
         h.actual_odds = cols[10].get_text(strip=True) if len(cols) > 10 else ""
+        if _attach_extras and _extras_map is not None:
+            _attach_extras(h, cols, _extras_map)   # v3.42追加：追加項目（失敗しても既存処理に影響しない）
 
         horses.append(h)
 

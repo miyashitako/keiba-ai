@@ -15,6 +15,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+try:  # v1.9追加：結果ページの追加項目（年齢・後3F・調教師・馬体重など）。無くても既存機能は動く。
+    from result_extras import build_col_map as _build_extras_col_map, attach_extras as _attach_extras, DEFAULT_JRA as _EXTRAS_DEFAULT
+except ImportError:  # pragma: no cover
+    _build_extras_col_map = None
+    _attach_extras = None
+    _EXTRAS_DEFAULT = {}
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -817,6 +824,7 @@ def fetch_race_result(race_id: str) -> tuple[RaceInfo, list[Horse]]:
         raise ValueError("結果テーブルが見つかりませんでした。")
     table = tables[0]
     rows = table.find_all("tr")[1:]
+    _extras_map = _build_extras_col_map(table, _EXTRAS_DEFAULT) if _build_extras_col_map else None
 
     horses: list[Horse] = []
     for row in rows:
@@ -873,6 +881,8 @@ def fetch_race_result(race_id: str) -> tuple[RaceInfo, list[Horse]]:
         h.actual_margin_str = cols[8].get_text(strip=True) if len(cols) > 8 else ""
         h.actual_popularity = cols[9].get_text(strip=True) if len(cols) > 9 else ""
         h.actual_odds = cols[10].get_text(strip=True) if len(cols) > 10 else ""
+        if _attach_extras and _extras_map is not None:
+            _attach_extras(h, cols, _extras_map)   # v1.9追加：追加項目（失敗しても既存処理に影響しない）
 
         horses.append(h)
 
