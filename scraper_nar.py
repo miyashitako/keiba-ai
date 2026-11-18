@@ -758,12 +758,16 @@ def fetch_all_horses_nar_backtest(
     horses = None
     if use_cache:
         cached = local_cache.get_race_result(race_id)
-        if cached is not None:
+        # 馬が0頭の「空の結果」はキャッシュとして使わない（取得時の一時的な空応答が
+        # 恒久的に居座り、実際には開催があったレースが「出走頭数3頭未満」として
+        # 飛ばされる事象が確認されたため）。非開催のレースは毎回取り直しになるが、
+        # バッチの進捗ファイルで処理済みになるので実害は小さい。
+        if cached is not None and cached[1]:
             race_info, horses = cached
 
     if race_info is None:
         race_info, horses = fetch_race_result_nar(race_id)
-        if use_cache:
+        if use_cache and horses:   # 空の結果はキャッシュに保存しない
             local_cache.set_race_result(race_id, race_info, horses)
 
     if isinstance(race_date, datetime.date):
@@ -785,7 +789,7 @@ def fetch_all_horses_nar_backtest(
                     )
                 if full_history is None:
                     full_history = fetch_past_races(horse.horse_id, limit=None)
-                    if use_cache:
+                    if use_cache and full_history:   # 空の履歴はキャッシュしない
                         local_cache.set_horse_past_races(horse.horse_id, full_history)
                     time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
                 if horse_cache is not None:
@@ -819,13 +823,20 @@ def fetch_all_horses_nar(
     horses = fetch_shutuba_nar(race_id)
 
     import time
+    fail_streak = 0
     for horse in horses:
         if horse.horse_id:
             try:
                 horse.past_races = fetch_past_races(horse.horse_id, limit=past_limit)
+                fail_streak = 0
             except Exception as e:
                 horse.past_races = []
+                fail_streak += 1
                 print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
+                if fail_streak >= 3:
+                    raise ConnectionError(
+                        "馬の過去走を連続して取得できませんでした（netkeibaのアクセス制限の可能性）。"
+                        f"時間を置いて再実行してください。最後のエラー: {e}")
             time.sleep(1.0)
 
     return race_info, horses

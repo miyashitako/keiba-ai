@@ -5,7 +5,7 @@ netkeiba スクレイピングモジュール
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.1-local_cache_graceful_fallback"
+__version__ = "2.3-utf8_autodetect"
 
 import requests
 import datetime
@@ -528,6 +528,16 @@ def fetch_shutuba(race_url: str) -> list[Horse]:
 # 各馬過去走取得
 # ──────────────────────────────────────────────
 
+def _decode_html(content: bytes) -> str:
+    """HTMLのバイト列を文字コード自動判定で文字列にする（v2.3）。
+    db.netkeiba.com は以前EUC-JP、現在はUTF-8で返す。厳密なUTF-8として読めればUTF-8、
+    読めなければEUC-JP（cp51932相当）にフォールバックする。"""
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("euc-jp", errors="replace")
+
+
 def fetch_past_races(horse_id: str, limit: "int | None" = 5) -> list[PastRace]:
     """
     馬の過去走データを取得する（最大limit走）
@@ -552,13 +562,22 @@ def fetch_past_races(horse_id: str, limit: "int | None" = 5) -> list[PastRace]:
     except Exception as e:
         raise ConnectionError(f"馬情報の取得に失敗しました ({horse_id}): {e}")
 
-    if res.status_code != 200:
+    # v2.2：アクセス制限（400/403/429/503等）を「過去走なし」と区別する。
+    #   以前は空リストで黙らせていたため、制限中は全馬が「過去走0件」に見えていた。
+    #   404（存在しない馬ID）だけは従来どおり空リスト。
+    if res.status_code == 404:
         return []
+    if res.status_code != 200:
+        raise ConnectionError(f"HTTP {res.status_code}（アクセス制限の可能性）: {horse_id}")
 
-    html_text = res.content.decode("euc-jp", errors="replace")
+    html_text = _decode_html(res.content)
     soup = BeautifulSoup(html_text, "html.parser")
     table = soup.find("table", class_="db_h_race_results")
     if table is None:
+        # 200なのに表が無い：初出走馬の可能性もあるが、ブロック画面・構造変更の疑いもある。
+        _t = soup.find("title")
+        print(f"[WARN] 過去走の表が見つかりません ({horse_id}) "
+              f"title={_t.get_text(strip=True)[:40] if _t else None!r} size={len(res.content)}")
         return []
 
     past_races = []
@@ -761,13 +780,20 @@ def fetch_all_horses(race_url: str, past_limit: int = 10) -> tuple[RaceInfo, lis
     race_info = fetch_race_info(race_url)
     horses    = fetch_shutuba(race_url)
 
+    fail_streak = 0
     for horse in horses:
         if horse.horse_id:
             try:
                 horse.past_races = fetch_past_races(horse.horse_id, limit=past_limit)
+                fail_streak = 0
             except Exception as e:
                 horse.past_races = []
+                fail_streak += 1
                 print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
+                if fail_streak >= 3:   # v2.2：制限中に全馬「過去走0件」で予想が出るのを防ぐ
+                    raise ConnectionError(
+                        "馬の過去走を連続して取得できませんでした（netkeibaのアクセス制限の可能性）。"
+                        f"時間を置いて再実行してください。最後のエラー: {e}")
             time.sleep(1.0)
 
     return race_info, horses
@@ -953,12 +979,16 @@ def fetch_all_horses_backtest(
     horses = None
     if use_cache:
         cached = local_cache.get_race_result(race_id)
-        if cached is not None:
+        # 馬が0頭の「空の結果」はキャッシュとして使わない（取得時の一時的な空応答が
+        # 恒久的に居座り、実際には開催があったレースが「出走頭数3頭未満」として
+        # 飛ばされる事象が確認されたため）。非開催のレースは毎回取り直しになるが、
+        # バッチの進捗ファイルで処理済みになるので実害は小さい。
+        if cached is not None and cached[1]:
             race_info, horses = cached
 
     if race_info is None:
         race_info, horses = fetch_race_result(race_id)
-        if use_cache:
+        if use_cache and horses:   # 空の結果はキャッシュに保存しない
             local_cache.set_race_result(race_id, race_info, horses)
 
     # race_infoのrace_date（例："2026年8月14日"）を
@@ -982,7 +1012,7 @@ def fetch_all_horses_backtest(
                     )
                 if full_history is None:
                     full_history = fetch_past_races(horse.horse_id, limit=None)
-                    if use_cache:
+                    if use_cache and full_history:   # v2.2：空の履歴はキャッシュしない
                         local_cache.set_horse_past_races(horse.horse_id, full_history)
                     time.sleep(sleep_sec)   # 新規リクエスト時のみレート制限
                 if horse_cache is not None:
@@ -1089,7 +1119,7 @@ def fetch_jra_race_ids_for_date(date, debug: bool = True, max_retries: int = 3) 
     # 従来utf-8決め打ちにしていたためデバッグ表示のtitleが文字化けしていた
     # （データ抽出自体はrace_id等が半角英数字のため実害はなかったが、
     # 目視確認しやすいよう修正）。
-    html_text = res.content.decode("euc-jp", errors="replace")
+    html_text = _decode_html(res.content)
 
     if debug:
         title_m = re.search(r"<title>(.*?)</title>", html_text, re.DOTALL)
