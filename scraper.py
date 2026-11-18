@@ -1010,6 +1010,9 @@ def fetch_all_horses_backtest(
                     full_history = local_cache.get_horse_past_races(
                         horse.horse_id, min_valid_date=target_date_str
                     )
+                # v2.3：キャッシュが空リストなら取りこぼしの疑いがあるので取り直す
+                if not full_history:
+                    full_history = None
                 if full_history is None:
                     full_history = fetch_past_races(horse.horse_id, limit=None)
                     if use_cache and full_history:   # v2.2：空の履歴はキャッシュしない
