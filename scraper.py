@@ -5,7 +5,7 @@ netkeiba スクレイピングモジュール
 """
 
 # バージョン識別用（お手元のファイルが最新か確認する用途）
-__version__ = "2.3-utf8_autodetect"
+__version__ = "2.4-extras_attach"
 
 import requests
 import datetime
@@ -772,6 +772,18 @@ def filter_past_races_before(past_races: list, cutoff_date: str) -> list:
 # 全出走馬の過去走をまとめて取得
 # ──────────────────────────────────────────────
 
+def _attach_shutuba_extras_safe(horses, race_url: str, system: str = "JRA") -> int:
+    """出馬表（結果ページ）から年齢・調教師を各Horseに付ける（v2.4）。失敗しても予想は止めない。"""
+    try:
+        from extras_adjust import attach_shutuba_extras
+        n = attach_shutuba_extras(horses, race_url, system)
+        print(f"[INFO] 出馬表の追加項目（年齢・調教師）：{n}/{len(horses)}頭")
+        return n
+    except Exception as e:
+        print(f"[WARN] 出馬表の追加項目の取り込みに失敗（補正なしで続行）: {e}")
+        return 0
+
+
 def fetch_all_horses(race_url: str, past_limit: int = 10) -> tuple[RaceInfo, list[Horse]]:
     """
     レース情報取得 → 出走表取得 → 各馬の過去走取得 をまとめて実行
@@ -796,6 +808,7 @@ def fetch_all_horses(race_url: str, past_limit: int = 10) -> tuple[RaceInfo, lis
                         f"時間を置いて再実行してください。最後のエラー: {e}")
             time.sleep(1.0)
 
+    _attach_shutuba_extras_safe(horses, race_url, "JRA")   # v2.4：年齢・騎手・調教師の補正用
     return race_info, horses
 
 
@@ -921,6 +934,7 @@ def fetch_all_horses_backtest(
     horse_cache: "dict | None" = None,
     sleep_sec: float = 1.0,
     use_cache: bool = True,
+    attach_extras: bool = False,   # v2.4：Trueで出馬表（結果ページ）から年齢・調教師を付ける（アプリ用）
 ) -> tuple[RaceInfo, list[Horse]]:
     """
     レース終了後の事後検証用：確定結果ページから出走馬情報＋実際の着順を取得し、
@@ -1029,6 +1043,8 @@ def fetch_all_horses_backtest(
             horse.past_races = []
             print(f"[WARN] {horse.name} の過去走取得失敗: {e}")
 
+    if attach_extras:
+        _attach_shutuba_extras_safe(horses, race_url, "JRA")
     return race_info, horses
 
 

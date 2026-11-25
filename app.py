@@ -9,6 +9,16 @@ import pandas as pd
 from scraper import fetch_all_horses, fetch_all_horses_backtest, RaceInfo
 from results_logger import log_backtest_results
 import calculator
+
+# v1.7：年齢・騎手・調教師の補正（fit_extras_adjust.py が作る extras_adjust.json を使う。JRAのみ）。
+# 根拠：別の年への当てはめ検証（2023→2024-25、逆方向）で、掛け率×0.5〜1.25 の範囲で
+# 1位予想の勝率が +2.3〜2.9pt、勝敗の対数尤度・3着内率も改善。既定は×0.75。
+try:
+    from extras_adjust import load_table as _load_extras_table, extras_points as _extras_points
+    EXTRAS_TABLE = _load_extras_table()      # extras_adjust.json が無ければ None（補正なし）
+except Exception:
+    EXTRAS_TABLE = None
+EXTRAS_DEFAULT_SCALE = 0.75
 try:
     from calculator import (
         calc_phase1, calc_phase2, calc_phase2_all,
@@ -197,7 +207,7 @@ if fetch_btn:
     with st.spinner("データ取得中... （各馬の過去走取得のため1〜2分かかります）"):
         try:
             if backtest_mode:
-                race_info, horses = fetch_all_horses_backtest(race_url, past_limit=5)
+                race_info, horses = fetch_all_horses_backtest(race_url, past_limit=5, attach_extras=True)
             else:
                 race_info, horses = fetch_all_horses(race_url, past_limit=5)
             st.session_state.race_info    = race_info
@@ -356,6 +366,23 @@ if st.session_state.phase2_results:
         use_dist_apt = st.toggle("距離適性補正を使う", value=True,
                                  help="±200m以内の好走実績・スタミナ証明でボーナス。距離実績なしはペナルティ")
 
+    # v1.7：年齢・騎手・調教師の補正
+    col_opt5, col_opt6 = st.columns(2)
+    with col_opt5:
+        use_extras = st.toggle(
+            "年齢・騎手・調教師の補正を使う",
+            value=EXTRAS_TABLE is not None,
+            disabled=EXTRAS_TABLE is None,
+            help="過去2年分の検証で、スコアに足りない情報（年齢・騎手・調教師）を補う補正。"
+                 + ("" if EXTRAS_TABLE is not None else "【補正表 extras_adjust.json が見つかりません】"),
+        )
+    with col_opt6:
+        extras_scale = st.slider(
+            "補正の強さ（既定0.75）", 0.0, 1.5, EXTRAS_DEFAULT_SCALE, 0.05,
+            disabled=EXTRAS_TABLE is None,
+            help="検証では×0.5〜1.25でほぼ平坦（+2.3〜2.5pt）。1.0超は過剰になりうる。",
+        )
+
     # v2.13（2026/10/5）：「展開・トラックバイアス補正」のon/offトグルを廃止し、
     # 常時適用に変更（こうすけさん指摘：そもそもオフにする理由がなく、特に
     # 「ダート重・不良馬場→逃げ先行有利」は常に発動すべき）。
@@ -501,6 +528,44 @@ if st.session_state.phase2_results:
             else:
                 _wt_adjusted.append(r)
         _pace_base = sorted(_wt_adjusted, key=lambda x: x.phase2_score if use_phase2 else x.phase1_score)
+    # ─────────────────────────────────────────────────────────────────
+
+    # ── 年齢・騎手・調教師の補正（v1.7）────────────────────────────────
+    # 補正pt（−＝有利、＋＝不利）× 強さ を、斤量補正の後のスコアに足す。有効走数0の馬は対象外。
+    # 内訳はメモに [年騎調:…] として残す（記録・後の検証で差し引けるようにするため）。
+    if use_extras and EXTRAS_TABLE:
+        import copy as _cp4
+        _hs_ex = {h.number: h for h in st.session_state.horses}
+        _ex_adjusted, _n_age, _n_jk, _n_tr = [], 0, 0, 0
+        for r in _pace_base:
+            _h_ex = _hs_ex.get(r.horse_number)
+            _sc_now = r.phase2_score if use_phase2 else r.phase1_score
+            if _h_ex is None or _sc_now >= 9000:
+                _ex_adjusted.append(r)
+                continue
+            _age = getattr(_h_ex, "age", None)
+            _parts = _extras_points(EXTRAS_TABLE, "JRA", _age, _h_ex.jockey, getattr(_h_ex, "trainer", ""))
+            _n_age += 1 if _age else 0
+            _n_jk += 1 if _parts["jockey_matched"] else 0
+            _n_tr += 1 if _parts["trainer_matched"] else 0
+            _pts = _parts["total"] * extras_scale
+            if _pts == 0.0:
+                _ex_adjusted.append(r)
+                continue
+            _nr_e = _cp4.copy(r)
+            if use_phase2:
+                _nr_e.phase2_score = round(_nr_e.phase2_score + _pts, 3)
+            else:
+                _nr_e.phase1_score = round(_nr_e.phase1_score + _pts, 3)
+            _nr_e.note = (_nr_e.note + f" [年騎調:{_pts:+.2f}pt@P{2 if use_phase2 else 1}(年{_parts['age']:+.1f}/騎{_parts['jockey']:+.1f}"
+                                       f"/調{_parts['trainer']:+.1f}×{extras_scale:.2f})]").strip()
+            _ex_adjusted.append(_nr_e)
+        _pace_base = sorted(_ex_adjusted, key=lambda x: x.phase2_score if use_phase2 else x.phase1_score)
+        _n_h = len(_hs_ex)
+        if _n_age == 0:
+            st.warning("出馬表から年齢・調教師を取得できなかったため、年齢・調教師の補正は付いていません（騎手のみ）。")
+        st.caption(f"年齢・騎手・調教師の補正（強さ×{extras_scale:.2f}）：年齢 {_n_age}/{_n_h}頭、"
+                   f"騎手の名前一致 {_n_jk}頭、調教師の名前一致 {_n_tr}頭")
     # ─────────────────────────────────────────────────────────────────
 
     # 表示用ranking：Phase5適用済みならphase2_resultsを、未適用ならphase3_resultsを使う
