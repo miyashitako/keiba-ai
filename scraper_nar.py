@@ -471,6 +471,9 @@ def fetch_shutuba_nar(race_id: str) -> list[Horse]:
                 horse.sex = sex_age_text[0]
             elif sex_age_text[0] in ("セ", "騸"):
                 horse.sex = "セ"
+            _m_age = re.search(r"(\d+)", sex_age_text)   # v3.42：年齢（2歳限定戦の判定に使う）
+            if _m_age:
+                horse.age_num = int(_m_age.group(1))
 
         # col[5]: 斤量（例："54.0"）
         weight_text = cols[5].get_text(strip=True)
@@ -688,6 +691,9 @@ def fetch_race_result_nar(race_id: str) -> tuple[RaceInfo, list]:
                 h.sex = sex_age_text[0]
             elif sex_age_text[0] in ("セ", "騸"):
                 h.sex = "セ"
+            _m_age = re.search(r"(\d+)", sex_age_text)   # v3.42：年齢（2歳限定戦の判定に使う）
+            if _m_age:
+                h.age_num = int(_m_age.group(1))
 
         try:
             val = float(cols[5].get_text(strip=True))

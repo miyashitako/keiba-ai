@@ -31,6 +31,7 @@ calculator.pyのcalc_phase1()との主な違い：
   正規表現 \bA[0-9]*\b 等で対応済みだが、まれに誤判定の可能性あり。
 """
 
+import contextvars
 import re
 import unicodedata
 import statistics
@@ -1334,6 +1335,12 @@ JRA_TO_NAR_TRANSFER_CLASS = {
 }
 
 
+# 今回が2歳限定戦か（calc_phase1_all_nar が出走馬の年齢から設定。スレッドごとに独立）。
+# 2歳馬は他の馬齢と走らない＝出走表に2歳が1頭でもいれば2歳限定戦。
+_TWO_YEAR_OLD_RACE = contextvars.ContextVar("nar_two_year_old_race", default=False)
+JRA_TWO_YEAR_OLD_OPEN_KEYS = ("1勝クラス", "500万下")
+
+
 def get_jra_transfer_class_base(race_class: str) -> "float | None":
     """
     JRA時代のクラス表記から、地方競馬側の実際の受け入れクラス格付け
@@ -1344,6 +1351,12 @@ def get_jra_transfer_class_base(race_class: str) -> "float | None":
     フォールバックすること。
     """
     rc = _normalize_grade(race_class)
+    # 2歳限定戦のときは、JRAの2歳1勝クラス（旧500万下）を勝ち上がった馬は「オープン馬」
+    # （2歳戦には2勝クラス以上が無い）なので、BではなくOPに換算する（2026-11-26 兵庫ジュニアGP）。
+    if _TWO_YEAR_OLD_RACE.get():
+        for key in JRA_TWO_YEAR_OLD_OPEN_KEYS:
+            if key in rc:
+                return CLASS_BASE_NAR["OP"]
     for key, nar_class in JRA_TO_NAR_TRANSFER_CLASS.items():
         if key in rc:
             return CLASS_BASE_NAR[nar_class]
@@ -2267,10 +2280,25 @@ def calc_phase1_all_nar(
     current_class: str = "",
     target_venue: str = "",
     race_date: str = "",
+    two_year_old_race: "bool | None" = None,
 ) -> list:
     """
     出走馬リスト（scraper_nar.Horse）全頭についてcalc_phase1_narを実行する。
+    two_year_old_race：Noneなら、出走馬のage_num（性齢の年齢）に2歳がいるかで自動判定する
+    （2歳馬は他の馬齢と走らないので、1頭でもいれば2歳限定戦）。
     """
+    if two_year_old_race is None:
+        two_year_old_race = any(getattr(h, "age_num", None) == 2 for h in horses)
+    _tok = _TWO_YEAR_OLD_RACE.set(bool(two_year_old_race))
+    try:
+        return _calc_phase1_all_nar_body(horses, target_distance, target_surface, current_class,
+                                         target_venue, race_date, bool(two_year_old_race))
+    finally:
+        _TWO_YEAR_OLD_RACE.reset(_tok)
+
+
+def _calc_phase1_all_nar_body(horses, target_distance, target_surface, current_class,
+                              target_venue, race_date, two_year_old_race) -> list:
     results = []
     for h in horses:
         r = calc_phase1_nar(
@@ -2283,6 +2311,13 @@ def calc_phase1_all_nar(
             target_venue=target_venue,
             race_date=race_date,
         )
+        if two_year_old_race:
+            # 追跡用：2歳戦でJRA 1勝クラスをOP換算した馬には、メモに印を残す（採点には影響しない）
+            n_hit = sum(1 for pr in h.past_races[:NAR_ABILITY_AVG_WINDOW]
+                        if not pr.is_local
+                        and any(k in _normalize_grade(pr.race_class) for k in JRA_TWO_YEAR_OLD_OPEN_KEYS))
+            if n_hit:
+                r.note = (r.note + f" [2歳戦:JRA1勝クラス{n_hit}走をOP換算]").strip()
         results.append(r)
     return results
 
